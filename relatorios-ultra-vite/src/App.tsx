@@ -354,8 +354,9 @@ export default function App() {
           </div>
         </Card>
 
-        <footer className="text-xs text-zinc-500">
-          * Equivalências fixas: Obstétrico de rotina → 1× Abdominal total; Morfológico 1º → 1× Abdominal total + 1× Rins e Vias; Morfológico 2º → 1× Abdominal total + 1× Rins e Vias + 1× Transvaginal; Mamas/Mamas e Axilas → 2× Rins e Vias.
+        <footer className="report-footer text-xs text-zinc-500 space-y-1">
+          <p>Relatório Gerado pelo Sistema de  Gerenciamento e Laudos Automatizados LILI ® - Laudos Inteligentes - desenvolvido por Dr. Andrew Costa (c) 2025.</p>
+          <p>* Equivalências fixas: Obstétrico de rotina → 1× Abdominal total; Morfológico 1º → 1× Abdominal total + 1× Rins e Vias; Morfológico 2º → 1× Abdominal total + 1× Rins e Vias + 1× Transvaginal; Mamas/Mamas e Axilas → 2× Rins e Vias.</p>
         </footer>
       </div>
     </div>
