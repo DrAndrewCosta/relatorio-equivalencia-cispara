@@ -68,6 +68,20 @@ function expandEquivalenceCounts(rows: Row[]) {
   return counts;
 }
 
+const describeEquivalenceMap = (map?: EqMap) => {
+  if (!map) return "—";
+  const entries = (Object.entries(map) as [BaseKey, number | undefined][]) 
+    .filter(([, value]) => typeof value === "number" && value > 0)
+    .map(([key, value]) => [key, Number(value)] as [BaseKey, number]);
+  if (!entries.length) return "—";
+  return entries.map(([k, v]) => `${v}× ${k}`).join(" + ");
+};
+
+const resolveExamLabel = (id: string, custom: CustomExam[]) => {
+  if (id.startsWith("custom:")) { return custom.find((c) => `custom:${c.id}` === id)?.label || "Exame"; }
+  return findExamById(id)?.label || "Exame";
+};
+
 function usePrices() {
   const [prices, setPrices] = useLocalStorage<Prices>("relatorios-precos", {
     "Abdominal total": toCents(134.38), "Rins e Vias": toCents(119.61), "Transvaginal": toCents(109.33),
@@ -186,17 +200,17 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const currentClinic = clinics.find((c) => c.id === currentClinicId);
   const printRef = useRef<HTMLDivElement>(null);
+  const [generatedAt] = useState(() => new Date());
 
   const filtered = useMemo(() => rows.filter((r) => (!filterDate || r.date === filterDate) && r.clinicId === currentClinicId), [rows, filterDate, currentClinicId]);
   const filteredChanges = useMemo(() => changes.filter((c) => (!filterDate || c.date === filterDate) && c.clinicId === currentClinicId), [changes, filterDate, currentClinicId]);
 
   const totals = useMemo(() => {
-    const subtotalCents = filtered.reduce((acc, r) => acc + computeRowValue(r, prices, custom), 0);
     const equivalenceCounts = expandEquivalenceCounts(filtered);
-    const equivalenceValue = (Object.keys(equivalenceCounts) as BaseKey[]).reduce((acc, k) => acc + equivalenceCounts[k] * prices[k], 0);
     const examsCount = filtered.reduce((acc, r) => acc + r.qty, 0);
-    return { subtotalCents, equivalenceCounts, equivalenceValue, examsCount };
-  }, [filtered, prices, custom]);
+    return { equivalenceCounts, examsCount };
+  }, [filtered]);
+  const { equivalenceCounts, examsCount } = totals;
 
   type SumRow = { label: string; qty: number; cents: number };
   const sumRows: SumRow[] = useMemo(() => {
@@ -214,25 +228,58 @@ export default function App() {
   }, [filtered, prices, custom]);
 
   const grandTotal = useMemo(() => sumRows.reduce((acc, g) => acc + g.cents, 0), [sumRows]);
+  const detailRows = useMemo(() => filtered.map((r) => {
+    const id = String(r.examId);
+    const isCustom = id.startsWith("custom:");
+    const def = isCustom ? undefined : findExamById(id);
+    const label = resolveExamLabel(id, custom);
+    const equivalence = isCustom ? "—" : describeEquivalenceMap(def?.map);
+    const parcialCents = computeRowValue(r, prices, custom);
+    const obsText = (r.obs ?? "").trim();
+    return { ...r, label, equivalence, parcialCents, obsText, isEquivalence: !isCustom && EQ_IDS.has(id) };
+  }), [filtered, prices, custom]);
+  const observationEntries = useMemo(
+    () => detailRows.filter((r) => r.obsText).map((r) => ({ id: r.id, label: r.label, obs: r.obsText, qty: r.qty })),
+    [detailRows],
+  );
+  const clinicLine = useMemo(() => {
+    const parts = [currentClinic?.name, currentClinic?.place, currentClinic?.city]
+      .map((part) => part?.trim())
+      .filter((part) => part && part.length > 0) as string[];
+    return parts.join(" • ");
+  }, [currentClinic]);
+  const generatedAtLabel = useMemo(() => generatedAt.toLocaleDateString("pt-BR"), [generatedAt]);
+  const observationLines = useMemo(
+    () => observationEntries.map((obs) => `${obs.label}${obs.qty > 1 ? ` (${obs.qty}×)` : ""}: ${obs.obs}`),
+    [observationEntries],
+  );
+  const equivalenceRows = useMemo(
+    () =>
+      (Object.keys(prices) as BaseKey[])
+        .map((key) => ({ key, qty: equivalenceCounts[key], cents: equivalenceCounts[key] * prices[key] }))
+        .filter((row) => row.qty > 0),
+    [prices, equivalenceCounts],
+  );
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900 p-4 md:p-8">
-      <div className="max-w-6xl mx-auto space-y-6 print:space-y-3 print:pt-0 print-page" ref={printRef}>
-        <header className="print-block report-header">
-          <div className="report-logos">
-            {currentClinic?.logo && (<img src={currentClinic.logo} alt="Logo da unidade" className="h-10 w-auto object-contain rounded-md border border-zinc-200" />)}
+      <div className="max-w-6xl mx-auto space-y-6">
+        <div className="no-print space-y-4">
+          <div className="flex flex-col gap-1">
+            <h1 className="text-2xl font-semibold text-zinc-900">Gerador de relatórios de ultrassonografia</h1>
+            <p className="text-sm text-zinc-500">Preencha os lançamentos e gere um laudo profissional para impressão ou PDF.</p>
           </div>
-          <div className="text-center">
-            <h1 className="report-title">Relatório de procedimentos (ultrassonografias) - Dr. Andrew Costa</h1>
-            <p className="report-subtitle">
-              {currentClinic?.name}{currentClinic?.place ? ` • ${currentClinic.place}` : ""}{currentClinic?.city ? ` • ${currentClinic.city}` : ""}{filterDate ? ` • Data do atendimento: ${fmtBRDate(filterDate)}` : ""}
-            </p>
-          </div>
-          <div className="mt-3 flex items-center justify-center gap-2 no-print">
-            <select className="border rounded-lg px-2 py-2" value={currentClinicId} onChange={(e) => setCurrentClinicId(e.target.value)}>
-              {clinics.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
-            </select>
-            <input type="date" className="border rounded-lg px-2 py-2" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} />
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="flex flex-col">
+              <label className="text-xs font-medium text-zinc-500" htmlFor="clinic-select">Unidade</label>
+              <select id="clinic-select" className="border rounded-lg px-3 py-2 min-w-[14rem]" value={currentClinicId} onChange={(e) => setCurrentClinicId(e.target.value)}>
+                {clinics.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
+              </select>
+            </div>
+            <div className="flex flex-col">
+              <label className="text-xs font-medium text-zinc-500" htmlFor="filter-date">Data do atendimento</label>
+              <input id="filter-date" type="date" className="border rounded-lg px-3 py-2" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} />
+            </div>
             <ToolbarButton onClick={() => setFilterDate("")}>Limpar data</ToolbarButton>
             <ToolbarButton onClick={() => setShowSettings(true)}>Configurações</ToolbarButton>
             <ToolbarButton title={!filterDate ? "Selecione a data para imprimir" : filtered.length === 0 ? "Sem lançamentos" : "Imprimir / salvar em PDF"}
@@ -251,112 +298,149 @@ export default function App() {
               Exportar CSV
             </ToolbarButton>
           </div>
-        </header>
-
-        <Card title="Exames do dia" right={<Badge>{filtered.length} linha(s)</Badge>}>
-          <div className="space-y-3">
-            {rows.filter((r) => r.clinicId === currentClinicId).map((row) => (
-              <RowEditor key={row.id} row={row} custom={custom}
-                onChange={(r) => setRows((prev) => prev.map((x) => (x.id === row.id ? { ...r, clinicId: currentClinicId } : x)))}
-                onRemove={() => setRows((prev) => prev.filter((x) => x.id !== row.id))}
-              />
-            ))}
-            <div className="pt-2 flex gap-2 no-print">
-              <button className="px-4 py-2 rounded-lg bg-zinc-900 text-white"
-                onClick={() => setRows((prev) => [...prev, { id: crypto.randomUUID(), clinicId: currentClinicId, date: filterDate || new Date().toISOString().slice(0, 10), examId: "obst_rot", qty: 1, obs: "" }])}>
-                Adicionar linha
-              </button>
-              <button className="px-4 py-2 rounded-lg border" onClick={() => setRows((prev) => prev.filter((r) => r.clinicId !== currentClinicId))}>Limpar desta unidade</button>
-            </div>
-          </div>
-        </Card>
-
-        <div className="grid md:grid-cols-2 gap-6 print:grid-cols-2">
-          <Card title="Resumo do período filtrado" right={<Badge>{totals.examsCount} exame(s)</Badge>}>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between"><span>Total (exames reais)</span><strong>{BRL(fromCents(totals.subtotalCents))}</strong></div>
-              <div className="text-xs text-zinc-500">* Calculado pelas equivalências definidas para cada tipo.</div>
-              <hr className="my-2 border-zinc-200" />
-              <div className="grid grid-cols-2 gap-2">
-                {(Object.keys(prices) as BaseKey[]).map((k) => (
-                  <div key={k} className="flex items-center justify-between bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2">
-                    <span>{k} <span className="text-xs text-zinc-500">({BRL(fromCents(prices[k]))})</span></span>
-                    <strong>{totals.equivalenceCounts[k]}×</strong>
-                  </div>
-                ))}
+        </div>
+        <div className="no-print">
+          <Card title="Lançamentos do dia" right={<Badge>{rows.filter((r) => r.clinicId === currentClinicId).length} linha(s)</Badge>}>
+            <div className="space-y-3">
+              {rows.filter((r) => r.clinicId === currentClinicId).map((row) => (
+                <RowEditor key={row.id} row={row} custom={custom}
+                  onChange={(r) => setRows((prev) => prev.map((x) => (x.id === row.id ? { ...r, clinicId: currentClinicId } : x)))}
+                  onRemove={() => setRows((prev) => prev.filter((x) => x.id !== row.id))}
+                />
+              ))}
+              <div className="pt-2 flex flex-wrap gap-2">
+                <button className="px-4 py-2 rounded-lg bg-zinc-900 text-white"
+                  onClick={() => setRows((prev) => [...prev, { id: crypto.randomUUID(), clinicId: currentClinicId, date: filterDate || new Date().toISOString().slice(0, 10), examId: "obst_rot", qty: 1, obs: "" }])}>
+                  Adicionar linha
+                </button>
+                <button className="px-4 py-2 rounded-lg border" onClick={() => setRows((prev) => prev.filter((r) => r.clinicId !== currentClinicId))}>Limpar desta unidade</button>
               </div>
-              <div className="flex items-center justify-between mt-3"><span>Valor teórico pelas equivalências agregadas</span><strong>{BRL(fromCents(totals.equivalenceValue))}</strong></div>
-            </div>
-          </Card>
-
-          <Card title="Detalhamento (linhas filtradas)">
-            <div className="overflow-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left border-b border-zinc-200">
-                    <th className="py-2 pr-2">Tipo de exame</th>
-                    <th className="py-2 pr-2">Observações</th>
-                    <th className="py-2 pr-2 text-right">Qtde</th>
-                    <th className="py-2 pr-2">Equivalência</th>
-                    <th className="py-2 pr-2 text-right">Parcial</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((r) => {
-                    const id = String(r.examId);
-                    const isCustom = id.startsWith("custom:");
-                    const def = isCustom ? undefined : findExamById(id);
-                    const label = isCustom ? (custom.find((c) => `custom:${c.id}` === id)?.label || "Exame") : (def?.label || "Exame");
-                    const eq = isCustom ? "—" : ((Object.entries(def?.map || {}) as [BaseKey, number][]).map(([k, v]) => `${v}× ${k}`).join(" + "));
-                    const parcial = fromCents(computeRowValue(r, prices, custom));
-                    const isEqRow = !isCustom && EQ_IDS.has(id);
-                    return (
-                      <tr key={r.id} className={`border-b border-zinc-100 ${isEqRow ? "font-semibold" : ""}`}>
-                        <td className="py-2 pr-2">{label}</td>
-                        <td className="py-2 pr-2">{(r.obs ?? "").trim()}</td>
-                        <td className="py-2 pr-2 text-right">{r.qty}</td>
-                        <td className="py-2 pr-2">{eq}</td>
-                        <td className="py-2 pr-2 text-right">{BRL(parcial)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
             </div>
           </Card>
         </div>
+        <div className="report-paper print-block" ref={printRef}>
+          <header className="report-header">
+            <h1 className="report-title">Relatório de procedimentos (ultrassonografias) — Dr. Andrew Costa</h1>
+            <div className="report-meta">
+              <span>{clinicLine || "Unidade não informada"}</span>
+              <span>Data do atendimento: {filterDate ? fmtBRDate(filterDate) : "—"}</span>
+              <span>Relatório emitido em: {generatedAtLabel}</span>
+              <span>Total de exames: {examsCount}</span>
+              <span>Valor convertido: {BRL(fromCents(grandTotal))}</span>
+            </div>
+          </header>
 
-        <Card title="Somatório por tipo de exame">
-          <div className="overflow-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left border-b border-zinc-200">
-                  <th className="py-2 pr-2">Exame</th>
-                  <th className="py-2 pr-2 text-right">Quantidade</th>
-                  <th className="py-2 pr-2 text-right">Subtotal</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sumRows.map((g) => (
-                  <tr key={g.label} className="border-b border-zinc-100">
-                    <td className="py-2 pr-2">{g.label}</td>
-                    <td className="py-2 pr-2 text-right">{g.qty}</td>
-                    <td className="py-2 pr-2 text-right">{BRL(fromCents(g.cents))}</td>
-                  </tr>
+          <section className="report-section">
+            <h2 className="report-section-title">Observações</h2>
+            {observationLines.length > 0 ? (
+              <div className="report-observations-text">
+                {observationLines.map((line, index) => (
+                  <p key={index}>{line}</p>
                 ))}
-                <tr>
-                  <td className="py-2 pr-2 font-semibold">Total geral</td>
-                  <td className="py-2 pr-2 text-right font-semibold">{sumRows.reduce((acc, g) => acc + g.qty, 0)}</td>
-                  <td className="py-2 pr-2 text-right font-semibold">{BRL(fromCents(grandTotal))}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </Card>
+              </div>
+            ) : (
+              <p className="report-empty">Sem observações registradas para esta data.</p>
+            )}
+          </section>
 
-        <footer className="text-xs text-zinc-500">
-          * Equivalências fixas: Obstétrico de rotina → 1× Abdominal total; Morfológico 1º → 1× Abdominal total + 1× Rins e Vias; Morfológico 2º → 1× Abdominal total + 1× Rins e Vias + 1× Transvaginal; Mamas/Mamas e Axilas → 2× Rins e Vias.
-        </footer>
+          <section className="report-section">
+            <h2 className="report-section-title">Exames do dia</h2>
+            {detailRows.length > 0 ? (
+              <div className="report-table-wrapper">
+                <table className="report-table">
+                  <thead>
+                    <tr>
+                      <th>Tipo de exame</th>
+                      <th>Observações</th>
+                      <th className="right">Qtde</th>
+                      <th>Equivalência</th>
+                      <th className="right">Parcial</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detailRows.map((row) => (
+                      <tr key={row.id} className={row.isEquivalence ? "is-equivalence" : undefined}>
+                        <td>{row.label}</td>
+                        <td>{row.obsText || "—"}</td>
+                        <td className="right">{row.qty}</td>
+                        <td>{row.equivalence}</td>
+                        <td className="right">{BRL(fromCents(row.parcialCents))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="report-empty">Nenhum lançamento encontrado para a data selecionada.</p>
+            )}
+          </section>
+
+          <section className="report-section">
+            <h2 className="report-section-title">Equivalências de obstétricos, morfológicos e mamas</h2>
+            {equivalenceRows.length > 0 ? (
+              <div className="report-table-wrapper">
+                <table className="report-table">
+                  <thead>
+                    <tr>
+                      <th>Exame base</th>
+                      <th className="right">Quantidade</th>
+                      <th className="right">Valor convertido</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {equivalenceRows.map((row) => (
+                      <tr key={row.key}>
+                        <td>{row.key}</td>
+                        <td className="right">{row.qty}</td>
+                        <td className="right">{BRL(fromCents(row.cents))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="report-empty">Nenhuma equivalência gerada nesta data.</p>
+            )}
+          </section>
+
+          <section className="report-section">
+            <h2 className="report-section-title">Consolidado por tipo de exame</h2>
+            {sumRows.length > 0 ? (
+              <div className="report-table-wrapper">
+                <table className="report-table">
+                  <thead>
+                    <tr>
+                      <th>Exame</th>
+                      <th className="right">Quantidade</th>
+                      <th className="right">Subtotal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sumRows.map((g) => (
+                      <tr key={g.label}>
+                        <td>{g.label}</td>
+                        <td className="right">{g.qty}</td>
+                        <td className="right">{BRL(fromCents(g.cents))}</td>
+                      </tr>
+                    ))}
+                    <tr className="is-total">
+                      <td>Total geral</td>
+                      <td className="right">{sumRows.reduce((acc, g) => acc + g.qty, 0)}</td>
+                      <td className="right">{BRL(fromCents(grandTotal))}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="report-empty">Ainda não há consolidação para esta unidade/data.</p>
+            )}
+          </section>
+
+          <footer className="report-footer">
+            <p>* Equivalências fixas: Obstétrico de rotina → 1× Abdominal total; Morfológico 1º → 1× Abdominal total + 1× Rins e Vias; Morfológico 2º → 1× Abdominal total + 1× Rins e Vias + 1× Transvaginal; Mamas/Mamas e Axilas → 2× Rins e Vias.</p>
+            <p>Relatório gerado automaticamente pelo sistema de controle de ultrassonografias.</p>
+          </footer>
+        </div>
       </div>
     </div>
   );
