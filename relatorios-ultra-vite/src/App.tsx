@@ -248,6 +248,10 @@ export default function App() {
       .filter((part) => part && part.length > 0) as string[];
     return parts.join(" • ");
   }, [currentClinic]);
+  const clinicName = currentClinic?.name ?? "Unidade não informada";
+  const clinicPlace = currentClinic?.place ?? "—";
+  const clinicCity = currentClinic?.city ?? "—";
+  const attendanceDateLabel = filterDate ? fmtBRDate(filterDate) : "—";
   const generatedAtLabel = useMemo(() => generatedAt.toLocaleDateString("pt-BR"), [generatedAt]);
   const observationLines = useMemo(
     () => observationEntries.map((obs) => `${obs.label}${obs.qty > 1 ? ` (${obs.qty}×)` : ""}: ${obs.obs}`),
@@ -320,14 +324,47 @@ export default function App() {
         </div>
         <div className="report-paper print-block" ref={printRef}>
           <header className="report-header">
-            <h1 className="report-title">Relatório de procedimentos (ultrassonografias) — Dr. Andrew Costa</h1>
-            <div className="report-meta">
-              <span>{clinicLine || "Unidade não informada"}</span>
-              <span>Data do atendimento: {filterDate ? fmtBRDate(filterDate) : "—"}</span>
-              <span>Relatório emitido em: {generatedAtLabel}</span>
-              <span>Total de exames: {examsCount}</span>
-              <span>Valor convertido: {BRL(fromCents(grandTotal))}</span>
+            <div className="report-header-top">
+              <div>
+                <p className="report-pretitle">Dr. Andrew Costa</p>
+                <h1 className="report-title">Relatório de procedimentos (ultrassonografias)</h1>
+                <p className="report-subtitle">
+                  {clinicLine || "Unidade não informada"}
+                </p>
+              </div>
+              <div className="report-date-box">
+                <span className="label">Data do atendimento</span>
+                <span className="value">{attendanceDateLabel}</span>
+              </div>
             </div>
+            <div className="report-stats">
+              <div className="report-stat">
+                <span className="label">Total de exames</span>
+                <span className="value">{examsCount}</span>
+              </div>
+              <div className="report-stat">
+                <span className="label">Valor convertido</span>
+                <span className="value">{BRL(fromCents(grandTotal))}</span>
+              </div>
+            </div>
+            <dl className="report-meta-grid">
+              <div className="report-meta-item">
+                <dt>Unidade</dt>
+                <dd>{clinicName}</dd>
+              </div>
+              <div className="report-meta-item">
+                <dt>Local</dt>
+                <dd>{clinicPlace}</dd>
+              </div>
+              <div className="report-meta-item">
+                <dt>Município</dt>
+                <dd>{clinicCity}</dd>
+              </div>
+              <div className="report-meta-item">
+                <dt>Relatório emitido</dt>
+                <dd>{generatedAtLabel}</dd>
+              </div>
+            </dl>
           </header>
 
           <section className="report-section">
