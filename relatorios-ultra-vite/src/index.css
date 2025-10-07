@@ -65,8 +65,8 @@ body {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  align-items: flex-end;
-  gap: 1.25rem;
+  align-items: center;
+  gap: 1rem;
 }
 .report-pretitle {
   margin: 0;
@@ -91,15 +91,16 @@ body {
 .report-metrics {
   margin: 0;
   padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: stretch;
 }
 .report-metric-item {
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: #f6f7fb;
-  padding: 0.65rem 0.9rem;
+  background: #ffffff;
+  padding: 0.6rem 1rem;
 }
 .report-metric-item dt {
   margin: 0;
@@ -109,10 +110,11 @@ body {
   color: var(--muted);
 }
 .report-metric-item dd {
-  margin: 0.3rem 0 0;
-  font-size: 1.05rem;
+  margin: 0.25rem 0 0;
+  font-size: 1rem;
   font-weight: 600;
   color: var(--text);
+  white-space: nowrap;
 }
 .report-meta-grid {
   margin: 0;

@@ -200,17 +200,11 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const currentClinic = clinics.find((c) => c.id === currentClinicId);
   const printRef = useRef<HTMLDivElement>(null);
-  const [generatedAt] = useState(() => new Date());
 
   const filtered = useMemo(() => rows.filter((r) => (!filterDate || r.date === filterDate) && r.clinicId === currentClinicId), [rows, filterDate, currentClinicId]);
   const filteredChanges = useMemo(() => changes.filter((c) => (!filterDate || c.date === filterDate) && c.clinicId === currentClinicId), [changes, filterDate, currentClinicId]);
 
-  const totals = useMemo(() => {
-    const equivalenceCounts = expandEquivalenceCounts(filtered);
-    const examsCount = filtered.reduce((acc, r) => acc + r.qty, 0);
-    return { equivalenceCounts, examsCount };
-  }, [filtered]);
-  const { equivalenceCounts, examsCount } = totals;
+  const equivalenceCounts = useMemo(() => expandEquivalenceCounts(filtered), [filtered]);
 
   type SumRow = { label: string; qty: number; cents: number };
   const sumRows: SumRow[] = useMemo(() => {
@@ -252,7 +246,6 @@ export default function App() {
   const clinicPlace = currentClinic?.place ?? "—";
   const clinicCity = currentClinic?.city ?? "—";
   const attendanceDateLabel = filterDate ? fmtBRDate(filterDate) : "—";
-  const generatedAtLabel = useMemo(() => generatedAt.toLocaleDateString("pt-BR"), [generatedAt]);
   const observationLines = useMemo(
     () => observationEntries.map((obs) => `${obs.label}${obs.qty > 1 ? ` (${obs.qty}×)` : ""}: ${obs.obs}`),
     [observationEntries],
@@ -337,14 +330,6 @@ export default function App() {
                   <dt>Data do atendimento</dt>
                   <dd>{attendanceDateLabel}</dd>
                 </div>
-                <div className="report-metric-item">
-                  <dt>Total de exames</dt>
-                  <dd>{examsCount}</dd>
-                </div>
-                <div className="report-metric-item">
-                  <dt>Valor convertido</dt>
-                  <dd>{BRL(fromCents(grandTotal))}</dd>
-                </div>
               </dl>
             </div>
             <dl className="report-meta-grid">
@@ -361,8 +346,8 @@ export default function App() {
                 <dd>{clinicCity}</dd>
               </div>
               <div className="report-meta-item">
-                <dt>Relatório emitido</dt>
-                <dd>{generatedAtLabel}</dd>
+                <dt>Data do atendimento</dt>
+                <dd>{attendanceDateLabel}</dd>
               </div>
             </dl>
           </header>
