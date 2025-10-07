@@ -200,17 +200,11 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const currentClinic = clinics.find((c) => c.id === currentClinicId);
   const printRef = useRef<HTMLDivElement>(null);
-  const [generatedAt] = useState(() => new Date());
 
   const filtered = useMemo(() => rows.filter((r) => (!filterDate || r.date === filterDate) && r.clinicId === currentClinicId), [rows, filterDate, currentClinicId]);
   const filteredChanges = useMemo(() => changes.filter((c) => (!filterDate || c.date === filterDate) && c.clinicId === currentClinicId), [changes, filterDate, currentClinicId]);
 
-  const totals = useMemo(() => {
-    const equivalenceCounts = expandEquivalenceCounts(filtered);
-    const examsCount = filtered.reduce((acc, r) => acc + r.qty, 0);
-    return { equivalenceCounts, examsCount };
-  }, [filtered]);
-  const { equivalenceCounts, examsCount } = totals;
+  const equivalenceCounts = useMemo(() => expandEquivalenceCounts(filtered), [filtered]);
 
   type SumRow = { label: string; qty: number; cents: number };
   const sumRows: SumRow[] = useMemo(() => {
@@ -248,7 +242,10 @@ export default function App() {
       .filter((part) => part && part.length > 0) as string[];
     return parts.join(" • ");
   }, [currentClinic]);
-  const generatedAtLabel = useMemo(() => generatedAt.toLocaleDateString("pt-BR"), [generatedAt]);
+  const clinicName = currentClinic?.name ?? "Unidade não informada";
+  const clinicPlace = currentClinic?.place ?? "—";
+  const clinicCity = currentClinic?.city ?? "—";
+  const attendanceDateLabel = filterDate ? fmtBRDate(filterDate) : "—";
   const observationLines = useMemo(
     () => observationEntries.map((obs) => `${obs.label}${obs.qty > 1 ? ` (${obs.qty}×)` : ""}: ${obs.obs}`),
     [observationEntries],
@@ -320,14 +317,39 @@ export default function App() {
         </div>
         <div className="report-paper print-block" ref={printRef}>
           <header className="report-header">
-            <h1 className="report-title">Relatório de procedimentos (ultrassonografias) — Dr. Andrew Costa</h1>
-            <div className="report-meta">
-              <span>{clinicLine || "Unidade não informada"}</span>
-              <span>Data do atendimento: {filterDate ? fmtBRDate(filterDate) : "—"}</span>
-              <span>Relatório emitido em: {generatedAtLabel}</span>
-              <span>Total de exames: {examsCount}</span>
-              <span>Valor convertido: {BRL(fromCents(grandTotal))}</span>
+            <div className="report-heading">
+              <div>
+                <p className="report-pretitle">Dr. Andrew Costa</p>
+                <h1 className="report-title">Relatório de procedimentos (ultrassonografias)</h1>
+                <p className="report-subtitle">
+                  {clinicLine || "Unidade não informada"}
+                </p>
+              </div>
+              <dl className="report-metrics">
+                <div className="report-metric-item">
+                  <dt>Data do atendimento</dt>
+                  <dd>{attendanceDateLabel}</dd>
+                </div>
+              </dl>
             </div>
+            <dl className="report-meta-grid">
+              <div className="report-meta-item">
+                <dt>Unidade</dt>
+                <dd>{clinicName}</dd>
+              </div>
+              <div className="report-meta-item">
+                <dt>Local</dt>
+                <dd>{clinicPlace}</dd>
+              </div>
+              <div className="report-meta-item">
+                <dt>Município</dt>
+                <dd>{clinicCity}</dd>
+              </div>
+              <div className="report-meta-item">
+                <dt>Data do atendimento</dt>
+                <dd>{attendanceDateLabel}</dd>
+              </div>
+            </dl>
           </header>
 
           <section className="report-section">
@@ -404,7 +426,7 @@ export default function App() {
           </section>
 
           <section className="report-section">
-            <h2 className="report-section-title">Consolidado por tipo de exame</h2>
+            <h2 className="report-section-title">Relatório consolidado</h2>
             {sumRows.length > 0 ? (
               <div className="report-table-wrapper">
                 <table className="report-table">
@@ -438,7 +460,7 @@ export default function App() {
 
           <footer className="report-footer">
             <p>* Equivalências fixas: Obstétrico de rotina → 1× Abdominal total; Morfológico 1º → 1× Abdominal total + 1× Rins e Vias; Morfológico 2º → 1× Abdominal total + 1× Rins e Vias + 1× Transvaginal; Mamas/Mamas e Axilas → 2× Rins e Vias.</p>
-            <p>Relatório gerado automaticamente pelo sistema de controle de ultrassonografias.</p>
+            <p className="report-footer-note">Relatório Gerado pelo Sistema de Gerenciamento e Laudos Automatizados LILI ® - Laudos Inteligentes - desenvolvido por Dr. Andrew Costa (c) 2025.</p>
           </footer>
         </div>
       </div>
