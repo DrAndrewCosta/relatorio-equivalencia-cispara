@@ -324,7 +324,7 @@ export default function App() {
         </div>
         <div className="report-paper print-block" ref={printRef}>
           <header className="report-header">
-            <div className="report-header-top">
+            <div className="report-heading">
               <div>
                 <p className="report-pretitle">Dr. Andrew Costa</p>
                 <h1 className="report-title">Relatório de procedimentos (ultrassonografias)</h1>
@@ -332,20 +332,20 @@ export default function App() {
                   {clinicLine || "Unidade não informada"}
                 </p>
               </div>
-              <div className="report-date-box">
-                <span className="label">Data do atendimento</span>
-                <span className="value">{attendanceDateLabel}</span>
-              </div>
-            </div>
-            <div className="report-stats">
-              <div className="report-stat">
-                <span className="label">Total de exames</span>
-                <span className="value">{examsCount}</span>
-              </div>
-              <div className="report-stat">
-                <span className="label">Valor convertido</span>
-                <span className="value">{BRL(fromCents(grandTotal))}</span>
-              </div>
+              <dl className="report-metrics">
+                <div className="report-metric-item">
+                  <dt>Data do atendimento</dt>
+                  <dd>{attendanceDateLabel}</dd>
+                </div>
+                <div className="report-metric-item">
+                  <dt>Total de exames</dt>
+                  <dd>{examsCount}</dd>
+                </div>
+                <div className="report-metric-item">
+                  <dt>Valor convertido</dt>
+                  <dd>{BRL(fromCents(grandTotal))}</dd>
+                </div>
+              </dl>
             </div>
             <dl className="report-meta-grid">
               <div className="report-meta-item">
@@ -441,7 +441,7 @@ export default function App() {
           </section>
 
           <section className="report-section">
-            <h2 className="report-section-title">Consolidado por tipo de exame</h2>
+            <h2 className="report-section-title">Relatório consolidado</h2>
             {sumRows.length > 0 ? (
               <div className="report-table-wrapper">
                 <table className="report-table">
