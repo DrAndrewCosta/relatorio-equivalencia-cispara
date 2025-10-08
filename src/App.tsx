@@ -2,12 +2,30 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 
+import logoDrAndrewCosta from "./assets/dr-andrew-costa-logo.svg";
+
 type BaseKey = "Abdominal total" | "Rins e Vias" | "Transvaginal";
 type Prices = Record<BaseKey, number>;
 type EqMap = Partial<Record<BaseKey, number>>;
 type Clinic = { id: string; name: string; place?: string; city?: string; logo?: string };
 type ExamId = "obst_rot" | "morf_1tri" | "morf_2tri" | "mamas_axilas" | `custom:${string}`;
 type Row = { id: string; clinicId: string; date: string; examId: ExamId; qty: number; obs?: string };
+type PublicInterestChange = {
+  patientName: string;
+  requestedExam: string;
+  performedExam: string;
+  justification: string;
+};
+
+type Row = {
+  id: string;
+  clinicId: string;
+  date: string;
+  examId: ExamId;
+  qty: number;
+  obs?: string;
+  publicInterestChange?: PublicInterestChange;
+};
 type DetailedRow = Row & {
   label: string;
   equivalence: string;
@@ -133,6 +151,19 @@ function useLocalStorage<T>(key: string, initial: T) {
 
 function findExamById(id: ExamId) {
   return EXAMS_BY_ID.get(id);
+}
+
+function formatPublicInterestChange(change?: PublicInterestChange): string {
+  if (!change) return "";
+  const parts = [
+    change.patientName,
+    change.requestedExam,
+    change.performedExam,
+    change.justification,
+  ]
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join(" -> ") : "";
 }
 
 function describeEquivalenceMap(map?: EqMap): string {
@@ -314,6 +345,86 @@ const RowEditor: React.FC<{
           ))}
         </optgroup>
       </select>
+  const currentChange: PublicInterestChange = {
+    patientName: "",
+    requestedExam: "",
+    performedExam: "",
+    justification: "",
+    ...row.publicInterestChange,
+  };
+
+  const updatePublicInterestChange = (field: keyof PublicInterestChange, value: string) => {
+    const next = { ...currentChange, [field]: value };
+    const hasValues = Object.values(next).some((item) => item.trim() !== "");
+    onChange({
+      ...row,
+      publicInterestChange: hasValues ? next : undefined,
+    });
+  };
+
+  return (
+    <div className="grid grid-cols-12 gap-2 items-start">
+      <div className="col-span-8 space-y-2">
+        <select
+          className="w-full border rounded-lg px-2 py-2"
+          value={row.examId}
+          onChange={(event) => onChange({ ...row, examId: event.target.value as ExamId })}
+        >
+          <optgroup label="Equivalências">
+            {EXAMS.map((exam) => (
+              <option key={exam.id} value={exam.id}>
+                {exam.label}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="Outros exames (valor direto)">
+            {ALLOWED_DIRECT_EXAMS.map((exam, index) => (
+              <option key={exam.label} value={`custom:${index + 1}`}>
+                {normalizeLabel(exam.label)}
+              </option>
+            ))}
+          </optgroup>
+        </select>
+
+        <fieldset className="border border-slate-200 rounded-xl px-3 py-3 bg-slate-50">
+          <legend className="px-1 text-xs font-semibold text-slate-600">
+            Alterações no exame a favor do interesse público (opcional)
+          </legend>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              className="flex-1 min-w-[160px] border rounded-lg px-2 py-1 text-sm"
+              placeholder="Nome do paciente"
+              value={currentChange.patientName}
+              onChange={(event) => updatePublicInterestChange("patientName", event.target.value)}
+            />
+            <span className="text-base text-slate-500">→</span>
+            <input
+              type="text"
+              className="flex-1 min-w-[160px] border rounded-lg px-2 py-1 text-sm"
+              placeholder="Pedido médico"
+              value={currentChange.requestedExam}
+              onChange={(event) => updatePublicInterestChange("requestedExam", event.target.value)}
+            />
+            <span className="text-base text-slate-500">→</span>
+            <input
+              type="text"
+              className="flex-1 min-w-[160px] border rounded-lg px-2 py-1 text-sm"
+              placeholder="Exame realizado"
+              value={currentChange.performedExam}
+              onChange={(event) => updatePublicInterestChange("performedExam", event.target.value)}
+            />
+            <span className="text-base text-slate-500">→</span>
+            <input
+              type="text"
+              className="flex-1 min-w-[160px] border rounded-lg px-2 py-1 text-sm"
+              placeholder="Justificativa"
+              value={currentChange.justification}
+              onChange={(event) => updatePublicInterestChange("justification", event.target.value)}
+            />
+          </div>
+        </fieldset>
+      </div>
       <input
         type="number"
         min={1}
@@ -346,7 +457,6 @@ function createRow(clinicId: string, date: string): Row {
     date,
     examId: "obst_rot",
     qty: 1,
-    obs: "",
   };
 }
 
@@ -358,7 +468,7 @@ function buildDetailedRow(row: Row, prices: Prices): DetailedRow {
   const label = isCustom ? normalizeLabel(customExam?.label ?? "Exame") : definition?.label ?? "Exame";
   const equivalence = isCustom ? "—" : describeEquivalenceMap(definition?.map);
   const partialCents = computeRowValue(row, prices);
-  const obsText = (row.obs ?? "").trim();
+  const obsText = formatPublicInterestChange(row.publicInterestChange) || (row.obs ?? "").trim();
 
   return { ...row, label, equivalence, partialCents, obsText };
 }
@@ -376,6 +486,14 @@ export default function App() {
 
   const printRef = useRef<HTMLDivElement>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [reportNotes, setReportNotes] = useLocalStorage<Record<string, string>>(
+    STORAGE_KEYS.reportNotes,
+    {}
+  );
+
+  const printRef = useRef<HTMLDivElement>(null);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [exportLayout, setExportLayout] = useState<ExportLayout | null>(null);
 
   const currentClinic = useMemo(
     () => clinics.find((clinic) => clinic.id === currentClinicId),
@@ -393,6 +511,34 @@ export default function App() {
   );
 
   const detailMap = useMemo(() => new Map(detailedRows.map((row) => [row.id, row])), [detailedRows]);
+
+  const reportNotesKey = currentClinicId && filterDate ? `${currentClinicId}::${filterDate}` : "";
+  const currentNotes = reportNotesKey ? reportNotes[reportNotesKey] ?? "" : "";
+
+  const handleReportNotesChange = useCallback(
+    (value: string) => {
+      if (!reportNotesKey) return;
+      setReportNotes((previous) => {
+        const next = { ...previous };
+        if (value.trim()) {
+          next[reportNotesKey] = value;
+        } else {
+          delete next[reportNotesKey];
+        }
+        return next;
+      });
+    },
+    [reportNotesKey, setReportNotes]
+  );
+
+  const noteLines = useMemo(
+    () =>
+      currentNotes
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+    [currentNotes]
+  );
 
   const equivalenceCounts = useMemo(() => expandEquivalenceCounts(filteredRows), [filteredRows]);
 
@@ -545,9 +691,17 @@ export default function App() {
                   type="button"
                   className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={!hasDataForExport || isGeneratingPdf}
-                  onClick={handleGeneratePdf}
+                  onClick={() => generatePdf("full")}
                 >
-                  {isGeneratingPdf ? "Gerando..." : "Gerar PDF"}
+                  {isGeneratingFullPdf ? "Gerando..." : "Gerar PDF completo"}
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!hasDataForExport || isGeneratingPdf}
+                  onClick={() => generatePdf("consolidated")}
+                >
+                  {isGeneratingConsolidatedPdf ? "Gerando..." : "Gerar PDF consolidado"}
                 </button>
                 <button
                   type="button"
@@ -559,6 +713,48 @@ export default function App() {
                 </button>
               </div>
             </div>
+          </div>
+
+          <div className="border rounded-2xl p-4 space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold">Lançamentos do dia selecionado</h2>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg border"
+                  onClick={handleAddRow}
+                  disabled={!currentClinicId}
+                >
+                  Adicionar exame
+                </button>
+                {filteredRows.length > 0 && (
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded-lg border"
+                    onClick={() => handleDuplicateRow(filteredRows[filteredRows.length - 1])}
+                  >
+                    Duplicar último
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {filteredRows.length === 0 ? (
+              <p className="text-sm text-zinc-500">
+                Nenhum lançamento para esta unidade/data. Clique em “Adicionar exame” para começar.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {filteredRows.map((row) => (
+                  <div key={row.id} className="border rounded-xl p-3">
+                    <RowEditor row={row} onChange={handleRowChange} onRemove={() => handleRowRemove(row.id)} />
+                    <div className="mt-2 text-sm text-zinc-500">
+                      Parcial calculado: {BRL(fromCents(detailMap.get(row.id)?.partialCents ?? 0))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="border rounded-2xl p-4 space-y-4">
