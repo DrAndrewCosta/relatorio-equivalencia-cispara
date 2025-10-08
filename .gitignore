@@ -1,0 +1,5 @@
+node_modules/
+dist/
+relatorios-ultra-vite/
+*.zip
+.DS_Store
