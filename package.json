@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --port 5175",
     "build": "vite build",
-    "preview": "vite preview --port 5175"
+    "preview": "vite preview --port 5175",
+    "archive": "bash scripts/create-archive.sh"
   },
   "dependencies": {
     "html2canvas": "^1.4.1",

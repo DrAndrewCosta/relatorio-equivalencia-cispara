@@ -32,6 +32,8 @@ type DetailedRow = Row & {
   obsText: string;
 };
 
+type ExportLayout = "full" | "consolidated";
+
 const STORAGE_KEYS = {
   prices: "relatorios-precos",
   clinics: "relatorios-clinicas",
@@ -461,6 +463,7 @@ export default function App() {
 
   const printRef = useRef<HTMLDivElement>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [exportLayout, setExportLayout] = useState<ExportLayout | null>(null);
 
   const currentClinic = useMemo(
     () => clinics.find((clinic) => clinic.id === currentClinicId),
@@ -549,6 +552,9 @@ export default function App() {
   }, [equivalenceRows, filteredRows]);
 
   const hasDataForExport = filterDate !== "" && filteredRows.length > 0;
+  const isConsolidatedLayout = exportLayout === "consolidated";
+  const isGeneratingFullPdf = isGeneratingPdf && exportLayout === "full";
+  const isGeneratingConsolidatedPdf = isGeneratingPdf && exportLayout === "consolidated";
 
   const handleRowChange = useCallback(
     (updatedRow: Row) => {
@@ -581,98 +587,119 @@ export default function App() {
     [setRows]
   );
 
-  const handleGeneratePdf = useCallback(async () => {
-    if (!hasDataForExport || !printRef.current) return;
+  const generatePdf = useCallback(
+    async (layout: ExportLayout) => {
+      if (!hasDataForExport) return;
 
-    setIsGeneratingPdf(true);
-    try {
-      const element = printRef.current;
-      const canvas = await html2canvas(element, {
-        scale: 2,
-        backgroundColor: "#fff",
-        useCORS: true,
-      });
+      setIsGeneratingPdf(true);
+      setExportLayout(layout);
 
-      const image = canvas.toDataURL("image/png");
-      const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
-      const width = pdf.internal.pageSize.getWidth();
-      const height = pdf.internal.pageSize.getHeight();
-      const margin = 8;
-      const pageWidth = width - margin * 2;
-      const pageHeight = height - margin * 2;
-      const scale = Math.min(pageWidth / canvas.width, 1);
-      const renderWidth = canvas.width * scale;
-      const renderHeight = canvas.height * scale;
-      const sliceHeightPx = pageHeight / scale;
-
-      if (renderHeight <= pageHeight) {
-        pdf.addImage(
-          image,
-          "PNG",
-          (width - renderWidth) / 2,
-          (height - renderHeight) / 2,
-          renderWidth,
-          renderHeight,
-          undefined,
-          "FAST"
-        );
-      } else {
-        let offset = 0;
-        let pageIndex = 0;
-        const totalHeight = canvas.height;
-
-        while (offset < totalHeight) {
-          const currentSliceHeight = Math.min(sliceHeightPx, totalHeight - offset);
-          const sliceCanvas = document.createElement("canvas");
-          sliceCanvas.width = canvas.width;
-          sliceCanvas.height = currentSliceHeight;
-          const context = sliceCanvas.getContext("2d");
-
-          if (!context) {
-            throw new Error("Não foi possível preparar a página do PDF");
+      const waitForNextFrame = () =>
+        new Promise<void>((resolve) => {
+          if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+            window.requestAnimationFrame(() => resolve());
+          } else {
+            setTimeout(() => resolve(), 0);
           }
+        });
 
-          context.drawImage(
-            canvas,
-            0,
-            offset,
-            canvas.width,
-            currentSliceHeight,
-            0,
-            0,
-            canvas.width,
-            currentSliceHeight
-          );
+      await waitForNextFrame();
+      await waitForNextFrame();
 
-          const sliceImage = sliceCanvas.toDataURL("image/png");
-          if (pageIndex > 0) {
-            pdf.addPage();
-          }
+      try {
+        const element = printRef.current;
+        if (!element) return;
 
+        const canvas = await html2canvas(element, {
+          scale: 2,
+          backgroundColor: "#fff",
+          useCORS: true,
+        });
+
+        const image = canvas.toDataURL("image/png");
+        const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
+        const width = pdf.internal.pageSize.getWidth();
+        const height = pdf.internal.pageSize.getHeight();
+        const margin = 8;
+        const pageWidth = width - margin * 2;
+        const pageHeight = height - margin * 2;
+        const scale = Math.min(pageWidth / canvas.width, 1);
+        const renderWidth = canvas.width * scale;
+        const renderHeight = canvas.height * scale;
+        const sliceHeightPx = pageHeight / scale;
+
+        if (renderHeight <= pageHeight) {
           pdf.addImage(
-            sliceImage,
+            image,
             "PNG",
             (width - renderWidth) / 2,
-            margin,
+            (height - renderHeight) / 2,
             renderWidth,
-            currentSliceHeight * scale,
+            renderHeight,
             undefined,
             "FAST"
           );
+        } else {
+          let offset = 0;
+          let pageIndex = 0;
+          const totalHeight = canvas.height;
 
-          offset += currentSliceHeight;
-          pageIndex += 1;
+          while (offset < totalHeight) {
+            const currentSliceHeight = Math.min(sliceHeightPx, totalHeight - offset);
+            const sliceCanvas = document.createElement("canvas");
+            sliceCanvas.width = canvas.width;
+            sliceCanvas.height = currentSliceHeight;
+            const context = sliceCanvas.getContext("2d");
+
+            if (!context) {
+              throw new Error("Não foi possível preparar a página do PDF");
+            }
+
+            context.drawImage(
+              canvas,
+              0,
+              offset,
+              canvas.width,
+              currentSliceHeight,
+              0,
+              0,
+              canvas.width,
+              currentSliceHeight
+            );
+
+            const sliceImage = sliceCanvas.toDataURL("image/png");
+            if (pageIndex > 0) {
+              pdf.addPage();
+            }
+
+            pdf.addImage(
+              sliceImage,
+              "PNG",
+              (width - renderWidth) / 2,
+              margin,
+              renderWidth,
+              currentSliceHeight * scale,
+              undefined,
+              "FAST"
+            );
+
+            offset += currentSliceHeight;
+            pageIndex += 1;
+          }
         }
-      }
 
-      pdf.save(`relatorio_exames_${fmtBRDate(filterDate)}.pdf`);
-    } catch (error) {
-      console.error("Erro ao gerar PDF", error);
-      alert("Não foi possível gerar o PDF. Tente novamente.");
-    } finally {
-      setIsGeneratingPdf(false);
-    }
-  }, [filterDate, hasDataForExport]);
+        const suffix = layout === "consolidated" ? "_procedimentos" : "";
+        pdf.save(`relatorio_exames_${fmtBRDate(filterDate)}${suffix}.pdf`);
+      } catch (error) {
+        console.error("Erro ao gerar PDF", error);
+        alert("Não foi possível gerar o PDF. Tente novamente.");
+      } finally {
+        setIsGeneratingPdf(false);
+        setExportLayout(null);
+      }
+    },
+    [filterDate, hasDataForExport]
+  );
 
   return (
     <div className="min-h-screen">
@@ -708,9 +735,17 @@ export default function App() {
                   type="button"
                   className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={!hasDataForExport || isGeneratingPdf}
-                  onClick={handleGeneratePdf}
+                  onClick={() => generatePdf("full")}
                 >
-                  {isGeneratingPdf ? "Gerando..." : "Gerar PDF"}
+                  {isGeneratingFullPdf ? "Gerando..." : "Gerar PDF completo"}
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!hasDataForExport || isGeneratingPdf}
+                  onClick={() => generatePdf("consolidated")}
+                >
+                  {isGeneratingConsolidatedPdf ? "Gerando..." : "Gerar PDF consolidado"}
                 </button>
                 <button
                   type="button"
@@ -818,88 +853,92 @@ export default function App() {
           </div>
         </div>
 
-        <section className="report-section">
-          <h2 className="report-section-title">Exames do dia</h2>
-          {detailedRows.length > 0 ? (
-            <div className="report-table-wrapper">
-              <table className="report-table" style={{ tableLayout: "fixed" }}>
-                <colgroup>
-                  <col />
-                  <col style={{ width: "38ch" }} />
-                  <col style={{ width: "64px" }} />
-                  <col />
-                  <col style={{ width: "110px" }} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>Tipo de exame</th>
-                    <th className="obs-col-header">Observações</th>
-                    <th className="right">Qtde</th>
-                    <th>Equivalência</th>
-                    <th className="right">Parcial</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detailedRows.map((row) => (
-                    <tr key={row.id}>
-                      <td>{row.label}</td>
-                      <td
-                        className="obs-col-cell"
-                        style={{ hyphens: "auto", overflowWrap: "anywhere", wordBreak: "break-word" }}
-                      >
-                        {row.obsText || "—"}
+        {!isConsolidatedLayout && (
+          <section className="report-section">
+            <h2 className="report-section-title">Exames do dia</h2>
+            {detailedRows.length > 0 ? (
+              <div className="report-table-wrapper">
+                <table className="report-table" style={{ tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col />
+                    <col style={{ width: "38ch" }} />
+                    <col style={{ width: "64px" }} />
+                    <col />
+                    <col style={{ width: "110px" }} />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th>Tipo de exame</th>
+                      <th className="obs-col-header">Observações</th>
+                      <th className="right">Qtde</th>
+                      <th>Equivalência</th>
+                      <th className="right">Parcial</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detailedRows.map((row) => (
+                      <tr key={row.id}>
+                        <td>{row.label}</td>
+                        <td
+                          className="obs-col-cell"
+                          style={{ hyphens: "auto", overflowWrap: "anywhere", wordBreak: "break-word" }}
+                        >
+                          {row.obsText || "—"}
+                        </td>
+                        <td className="right">{row.qty}</td>
+                        <td>{row.equivalence}</td>
+                        <td className="right">{BRL(fromCents(row.partialCents))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="report-empty">Nenhum lançamento encontrado para a data selecionada.</p>
+            )}
+          </section>
+        )}
+
+        {!isConsolidatedLayout && (
+          <section className="report-section">
+            <h2 className="report-section-title">Equivalências de obstétricos, morfológicos e mamas</h2>
+            {equivalenceRows.length > 0 ? (
+              <div className="report-table-wrapper">
+                <table className="report-table">
+                  <thead>
+                    <tr>
+                      <th>Base</th>
+                      <th className="right">Quantidade</th>
+                      <th className="right">Valor total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {equivalenceRows.map((row) => (
+                      <tr key={row.key}>
+                        <td>{row.key}</td>
+                        <td className="right">{row.qty}</td>
+                        <td className="right">{BRL(fromCents(row.cents))}</td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td colSpan={2} className="right font-semibold">
+                        Total geral
                       </td>
-                      <td className="right">{row.qty}</td>
-                      <td>{row.equivalence}</td>
-                      <td className="right">{BRL(fromCents(row.partialCents))}</td>
+                      <td className="right font-semibold">
+                        {BRL(fromCents(equivalenceRows.reduce((sum, current) => sum + current.cents, 0)))}
+                      </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="report-empty">Nenhum lançamento encontrado para a data selecionada.</p>
-          )}
-        </section>
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="report-empty">Ainda não há consolidação para esta unidade/data.</p>
+            )}
+          </section>
+        )}
 
         <section className="report-section">
-          <h2 className="report-section-title">Equivalências de obstétricos, morfológicos e mamas</h2>
-          {equivalenceRows.length > 0 ? (
-            <div className="report-table-wrapper">
-              <table className="report-table">
-                <thead>
-                  <tr>
-                    <th>Base</th>
-                    <th className="right">Quantidade</th>
-                    <th className="right">Valor total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {equivalenceRows.map((row) => (
-                    <tr key={row.key}>
-                      <td>{row.key}</td>
-                      <td className="right">{row.qty}</td>
-                      <td className="right">{BRL(fromCents(row.cents))}</td>
-                    </tr>
-                  ))}
-                  <tr>
-                    <td colSpan={2} className="right font-semibold">
-                      Total geral
-                    </td>
-                    <td className="right font-semibold">
-                      {BRL(fromCents(equivalenceRows.reduce((sum, current) => sum + current.cents, 0)))}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="report-empty">Ainda não há consolidação para esta unidade/data.</p>
-          )}
-        </section>
-
-        <section className="report-section">
-          <h2 className="report-section-title">Relatório Consolidado (por tipo de exame)</h2>
+          <h2 className="report-section-title">Relatório dos procedimentos realizados</h2>
           {consolidated.rows.length > 0 ? (
             <div className="report-table-wrapper">
               <table className="report-table">
@@ -931,20 +970,18 @@ export default function App() {
           )}
         </section>
 
-        <section className="report-section">
-          <h2 className="report-section-title">Observações finais</h2>
-          <div className="report-notes-box">
-            {noteLines.length > 0 ? (
+        {noteLines.length > 0 && (
+          <section className="report-section">
+            <h2 className="report-section-title">Observações finais</h2>
+            <div className="report-notes-box">
               <ul>
                 {noteLines.map((line, index) => (
                   <li key={`${line}-${index}`}>{line}</li>
                 ))}
               </ul>
-            ) : (
-              <div className="report-notes-placeholder">&nbsp;</div>
-            )}
-          </div>
-        </section>
+            </div>
+          </section>
+        )}
 
         <footer className="report-footer">
           <p>
