@@ -1,21 +1,65 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
+
+import logoDrAndrewCosta from "./assets/dr-andrew-costa-logo.svg";
 
 type BaseKey = "Abdominal total" | "Rins e Vias" | "Transvaginal";
 type Prices = Record<BaseKey, number>;
 type EqMap = Partial<Record<BaseKey, number>>;
 type Clinic = { id: string; name: string; place?: string; city?: string; logo?: string };
 type ExamId = "obst_rot" | "morf_1tri" | "morf_2tri" | "mamas_axilas" | `custom:${string}`;
-type Row = { id: string; clinicId: string; date: string; examId: ExamId; qty: number; obs?: string };
+type PublicInterestChange = {
+  patientName: string;
+  requestedExam: string;
+  performedExam: string;
+  justification: string;
+};
 
-const BASE_KEYS: BaseKey[] = ["Abdominal total","Rins e Vias","Transvaginal"];
-const EXAMS: { id: ExamId; label: string; map: EqMap }[] = [
+type Row = {
+  id: string;
+  clinicId: string;
+  date: string;
+  examId: ExamId;
+  qty: number;
+  obs?: string;
+  publicInterestChange?: PublicInterestChange;
+};
+type DetailedRow = Row & {
+  label: string;
+  equivalence: string;
+  partialCents: number;
+  obsText: string;
+};
+
+type ExportLayout = "full" | "consolidated";
+
+const STORAGE_KEYS = {
+  prices: "relatorios-precos",
+  clinics: "relatorios-clinicas",
+  currentClinic: "relatorios-current-clinic",
+  rows: "relatorios-rows",
+  filterDate: "relatorios-filter-date",
+  reportNotes: "relatorios-report-notes",
+} as const;
+
+const BASE_KEYS: BaseKey[] = ["Abdominal total", "Rins e Vias", "Transvaginal"];
+
+const EXAMS: ReadonlyArray<{ id: ExamId; label: string; map: EqMap }> = [
   { id: "obst_rot", label: "Obstétrico de rotina (pré-natal)", map: { "Abdominal total": 1 } },
-  { id: "morf_1tri", label: "Obstétrico morfológico (1º trimestre)", map: { "Abdominal total": 1, "Rins e Vias": 1 } },
-  { id: "morf_2tri", label: "Morfológico do 2º trimestre", map: { "Abdominal total": 1, "Rins e Vias": 1, "Transvaginal": 1 } },
+  {
+    id: "morf_1tri",
+    label: "Obstétrico morfológico (1º trimestre)",
+    map: { "Abdominal total": 1, "Rins e Vias": 1 },
+  },
+  {
+    id: "morf_2tri",
+    label: "Morfológico do 2º trimestre",
+    map: { "Abdominal total": 1, "Rins e Vias": 1, "Transvaginal": 1 },
+  },
   { id: "mamas_axilas", label: "Mamas / Mamas e Axilas", map: { "Rins e Vias": 2 } },
 ];
+
 const ALLOWED_DIRECT_EXAMS = [
   { label: "Ultrassonografia - rins e vias urinárias", price: 119.61 },
   { label: "Ultrassonografia - abdominal total", price: 134.38 },
@@ -26,238 +70,930 @@ const ALLOWED_DIRECT_EXAMS = [
   { label: "Ultrassonografia - próstata por via abdominal", price: 115.85 },
   { label: "Ultrassonografia - região inguinal", price: 120.95 },
   { label: "Ultrassonografia - partes moles", price: 127.06 },
-  { label: "Ultrassonografia - bolsa escrotal", price: 126.50 },
-  { label: "Ultrassonografia - tireoide", price: 129.90 },
+  { label: "Ultrassonografia - bolsa escrotal", price: 126.5 },
+  { label: "Ultrassonografia - tireoide", price: 129.9 },
   { label: "Ultrassonografia - tireóide com doppler", price: 158.13 },
-  { label: "Ultrassonografia - cervical", price: 131.50 },
-  { label: "Ultrassonografia cervical com doppler", price: 187.80 },
-  { label: "Ultrassonografia - glândulas salivares", price: 135.00 },
+  { label: "Ultrassonografia - cervical", price: 131.5 },
+  { label: "Ultrassonografia cervical com doppler", price: 187.8 },
+  { label: "Ultrassonografia - glândulas salivares", price: 135 },
   { label: "Ultrassonografia - transvaginal com doppler", price: 163.19 },
   { label: "Ultrassonografia - obstétrica Perfil Biofísico Fetal", price: 157.35 },
   { label: "Ultrassonografia - Translucência Nucal", price: 138.94 },
-  { label: "Ultrassonografia - mamas", price: 140.00 },
-  { label: "Ultrassonografia - axilas", price: 118.00 },
+  { label: "Ultrassonografia - mamas", price: 140 },
+  { label: "Ultrassonografia - axilas", price: 118 },
 ] as const;
 
-const toCents = (n: number) => Math.round(n * 100);
-const fromCents = (c: number) => c / 100;
-const BRL = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-const fmtBRDate = (iso?: string) => (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.split("-").reverse().join("-") : "");
+const EXAMS_BY_ID = new Map(EXAMS.map((exam) => [exam.id, exam] as const));
+
+function toCents(n: number): number {
+  return Math.round(n * 100);
+}
+
+function fromCents(cents: number): number {
+  return cents / 100;
+}
+
+const CURRENCY_FORMATTER = new Intl.NumberFormat("pt-BR", {
+  style: "currency",
+  currency: "BRL",
+});
+
+function BRL(value: number): string {
+  return CURRENCY_FORMATTER.format(value);
+}
+
+const DEFAULT_PRICES: Prices = {
+  "Abdominal total": toCents(134.38),
+  "Rins e Vias": toCents(119.61),
+  "Transvaginal": toCents(109.33),
+};
+
+const DEFAULT_CLINICS: Clinic[] = [
+  {
+    id: "cispara",
+    name: "CISPARÁ",
+    place: "Unidade básica",
+    city: "Perdigão/MG",
+  },
+];
+
+function fmtBRDate(iso?: string): string {
+  if (!iso) return "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  return iso.split("-").reverse().join("-");
+}
+
+function safeJsonParse<T>(value: string | null, fallback: T): T {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch (error) {
+    console.warn("Erro ao ler localStorage", error);
+    return fallback;
+  }
+}
 
 function useLocalStorage<T>(key: string, initial: T) {
-  const [state, setState] = useState<T>(() => { try { const raw = localStorage.getItem(key); return raw ? (JSON.parse(raw) as T) : initial; } catch { return initial; } });
-  useEffect(() => { try { localStorage.setItem(key, JSON.stringify(state)); } catch {} }, [key, state]);
+  const [state, setState] = useState<T>(() => {
+    if (typeof window === "undefined") return initial;
+    return safeJsonParse<T>(window.localStorage.getItem(key), initial);
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(key, JSON.stringify(state));
+    } catch (error) {
+      console.warn("Erro ao gravar localStorage", error);
+    }
+  }, [key, state]);
+
   return [state, setState] as const;
 }
-function findExamById(id: string) { return EXAMS.find(e => e.id === (id as ExamId)); }
-function describeEquivalenceMap(map?: EqMap) { if (!map) return "—"; const entries = Object.entries(map).filter(([,v])=> (v??0)>0).map(([k,v])=> `${v}× ${k}`); return entries.length? entries.join(" + ") : "—"; }
-function normalizeLabel(raw: string){ const s = raw.replace(/^Ultrassonografia\s*-\s*/i,"").trim(); const low=s.toLowerCase(); if(low.includes("abdominal total")||low.includes("abdômen total"))return "Abdominal total"; if(low.includes("rins e vias"))return "Rins e Vias"; if(low.includes("transvaginal"))return "Transvaginal"; return s[0]?.toUpperCase()+s.slice(1); }
-function computeRowValue(row: Row, prices: Prices) {
-  const id = String(row.examId);
-  if (id.startsWith("custom:")) { const idx = Number(id.split(":")[1]) - 1; const base = ALLOWED_DIRECT_EXAMS[idx]; return base ? toCents(base.price) * row.qty : 0; }
-  const def = findExamById(id); if(!def) return 0;
-  let cents = 0; (Object.keys(def.map) as BaseKey[]).forEach(k => { cents += (prices[k]||0) * (def.map?.[k]||0); });
+
+function findExamById(id: ExamId) {
+  return EXAMS_BY_ID.get(id);
+}
+
+function formatPublicInterestChange(change?: PublicInterestChange): string {
+  if (!change) return "";
+  const parts = [
+    change.patientName,
+    change.requestedExam,
+    change.performedExam,
+    change.justification,
+  ]
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join(" -> ") : "";
+}
+
+function describeEquivalenceMap(map?: EqMap): string {
+  if (!map) return "—";
+  const entries = Object.entries(map)
+    .filter(([, value]) => (value ?? 0) > 0)
+    .map(([key, value]) => `${value}× ${key}`);
+  return entries.length > 0 ? entries.join(" + ") : "—";
+}
+
+function normalizeLabel(raw: string): string {
+  const cleaned = raw.replace(/^Ultrassonografia\s*-\s*/i, "").trim();
+  if (!cleaned) return "Exame";
+
+  const normalized = cleaned.toLowerCase();
+  if (normalized.includes("abdominal total") || normalized.includes("abdômen total")) {
+    return "Abdominal total";
+  }
+  if (normalized.includes("rins e vias")) {
+    return "Rins e Vias";
+  }
+  if (normalized.includes("transvaginal")) {
+    return "Transvaginal";
+  }
+
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+function isCustomExamId(examId: ExamId): boolean {
+  return examId.startsWith("custom:");
+}
+
+function getCustomExamIndex(examId: ExamId): number {
+  if (!isCustomExamId(examId)) return -1;
+  const [, index] = examId.split(":");
+  return Number.parseInt(index, 10) - 1;
+}
+
+function getCustomExamDefinition(examId: ExamId) {
+  const index = getCustomExamIndex(examId);
+  return Number.isInteger(index) && index >= 0 ? ALLOWED_DIRECT_EXAMS[index] : undefined;
+}
+
+function computeRowValue(row: Row, prices: Prices): number {
+  if (isCustomExamId(row.examId)) {
+    const baseExam = getCustomExamDefinition(row.examId);
+    return baseExam ? toCents(baseExam.price) * row.qty : 0;
+  }
+
+  const definition = findExamById(row.examId);
+  if (!definition) return 0;
+
+  const cents = (Object.keys(definition.map) as BaseKey[]).reduce((sum, key) => {
+    const quantity = definition.map?.[key] ?? 0;
+    return sum + prices[key] * quantity;
+  }, 0);
+
   return cents * row.qty;
 }
-function expandEquivalenceCounts(rows: Row[]) {
-  const counts: Record<BaseKey, number> = { "Abdominal total":0, "Rins e Vias":0, "Transvaginal":0 };
-  rows.forEach(r=>{ const id=String(r.examId); if(id.startsWith("custom:")) return; const def=findExamById(id); if(!def) return; (Object.keys(def.map) as BaseKey[]).forEach(k=>{ counts[k]+= (def.map?.[k]||0)*r.qty; }); });
+
+function expandEquivalenceCounts(rows: Row[]): Record<BaseKey, number> {
+  const counts: Record<BaseKey, number> = {
+    "Abdominal total": 0,
+    "Rins e Vias": 0,
+    "Transvaginal": 0,
+  };
+
+  rows.forEach((row) => {
+    if (isCustomExamId(row.examId)) return;
+    const definition = findExamById(row.examId);
+    if (!definition) return;
+
+    (Object.keys(definition.map) as BaseKey[]).forEach((key) => {
+      counts[key] += (definition.map?.[key] ?? 0) * row.qty;
+    });
+  });
+
   return counts;
 }
 
-function usePrices(){ const [prices]=useLocalStorage<Prices>("relatorios-precos",{ "Abdominal total": toCents(134.38), "Rins e Vias": toCents(119.61), "Transvaginal": toCents(109.33) }); return {prices} as const; }
-function useClinics(){ const [clinics]=useLocalStorage<Clinic[]>("relatorios-clinicas",[ { id:"cispara", name:"CISPARÁ", place:"Unidade básica", city:"Perdigão/MG" } ]); const [currentClinicId,setCurrentClinicId]=useLocalStorage<string>("relatorios-current-clinic","cispara"); return {clinics,currentClinicId,setCurrentClinicId} as const; }
+function usePrices() {
+  const [prices, setPrices] = useLocalStorage<Prices>(STORAGE_KEYS.prices, DEFAULT_PRICES);
+  return { prices, setPrices } as const;
+}
 
-function buildCSVLines(rows: Row[], clinics: Clinic[]){
-  const headers=["Unidade","Local","Município","Data do atendimento","Tipo de exame","Observações","Quantidade","Equivalência"];
-  const lines=[headers.join(";")];
-  rows.forEach(r=>{ const id=String(r.examId); const clinic=clinics.find(c=>c.id===r.clinicId); const unidade=clinic?.name??r.clinicId; const local=clinic?.place??""; const municipio=clinic?.city??""; const label=id.startsWith("custom:")? normalizeLabel(ALLOWED_DIRECT_EXAMS[Number(id.split(":")[1])-1]?.label||"Exame") : (findExamById(id)?.label||"Exame"); const eq=id.startsWith("custom:")? "—":describeEquivalenceMap(findExamById(id)?.map); const obs=(r.obs??"").replace(/[;\r\n]/g," ").trim(); lines.push([unidade,local,municipio,fmtBRDate(r.date),label,obs,r.qty,eq].join(";")); });
+function useClinics() {
+  const [clinics, setClinics] = useLocalStorage<Clinic[]>(STORAGE_KEYS.clinics, DEFAULT_CLINICS);
+  const [currentClinicId, setCurrentClinicId] = useLocalStorage<string>(
+    STORAGE_KEYS.currentClinic,
+    DEFAULT_CLINICS[0]?.id ?? ""
+  );
+  return { clinics, setClinics, currentClinicId, setCurrentClinicId } as const;
+}
+
+function sanitizeCsvCell(value: string): string {
+  return value.replace(/[;\r\n]+/g, " ").trim();
+}
+
+function buildCsvLines(rows: DetailedRow[], clinics: Clinic[]) {
+  const headers = [
+    "Unidade",
+    "Local",
+    "Município",
+    "Data do atendimento",
+    "Tipo de exame",
+    "Observações",
+    "Quantidade",
+    "Equivalência",
+  ];
+
+  const lines = [headers.join(";")];
+
+  rows.forEach((row) => {
+    const clinic = clinics.find((item) => item.id === row.clinicId);
+    const unidade = clinic?.name ?? row.clinicId;
+    const local = clinic?.place ?? "";
+    const municipio = clinic?.city ?? "";
+    lines.push(
+      [
+        unidade,
+        local,
+        municipio,
+        fmtBRDate(row.date),
+        row.label,
+        sanitizeCsvCell(row.obsText || "—"),
+        row.qty,
+        row.equivalence,
+      ].join(";")
+    );
+  });
+
   return lines;
 }
-function exportCSV(rows: Row[], clinics: Clinic[]){ const csv="\uFEFF"+buildCSVLines(rows,clinics).join("\n"); const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`relatorio_exames_${new Date().toISOString().slice(0,10)}.csv`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),0); }
 
-const RowEditor: React.FC<{row: Row; onChange: (r: Row)=>void; onRemove: ()=>void}> = ({row,onChange,onRemove}) => (
-  <div className="grid grid-cols-12 gap-2 items-center">
-    <select className="col-span-7 border rounded-lg px-2 py-2" value={row.examId} onChange={(e)=> onChange({...row, examId: e.target.value as ExamId})}>
-      <optgroup label="Equivalências">
-        {EXAMS.map(x => <option key={x.id} value={x.id}>{x.label}</option>)}
-      </optgroup>
-      <optgroup label="Outros exames (valor direto)">
-        {ALLOWED_DIRECT_EXAMS.map((x,i)=> <option key={i} value={`custom:${i+1}`}>{normalizeLabel(x.label)}</option>)}
-      </optgroup>
-    </select>
-    <input type="number" min={1} className="col-span-2 border rounded-lg px-2 py-2 text-right" value={row.qty} onChange={(e)=> onChange({...row, qty: Math.max(1, Number(e.target.value||1))})} />
-    <input type="text" className="col-span-2 border rounded-lg px-2 py-2" placeholder="Observações (opcional)" value={row.obs??""} onChange={(e)=> onChange({...row, obs: e.target.value})} />
-    <button className="col-span-1 text-red-600 hover:underline" onClick={onRemove}>Remover</button>
-  </div>
-);
+function exportCsv(rows: DetailedRow[], clinics: Clinic[]) {
+  const csv = "\uFEFF" + buildCsvLines(rows, clinics).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
 
-export default function App(){
-  const {prices}=usePrices();
-  const {clinics,currentClinicId,setCurrentClinicId}=useClinics();
-  const today=new Date().toISOString().slice(0,10);
-  const [rows,setRows]=useLocalStorage<Row[]>("relatorios-rows",[
-    {id:crypto.randomUUID(),clinicId:currentClinicId,date:today,examId:"obst_rot",qty:1,obs:""}
-  ]);
-  const [filterDate,setFilterDate]=useLocalStorage<string>("relatorios-filter-date", today);
-  const currentClinic=useMemo(()=> clinics.find(c=>c.id===currentClinicId),[clinics,currentClinicId]);
-  const filtered=useMemo(()=> rows.filter(r=> r.clinicId===currentClinicId && r.date===filterDate ),[rows,currentClinicId,filterDate]);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `relatorio_exames_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
-  const detailRows = useMemo(()=> filtered.map(r=>{
-    const id=String(r.examId);
-    const isCustom=id.startsWith("custom:");
-    const def=isCustom?undefined:findExamById(id);
-    const idx = isCustom ? (Number(id.split(":")[1])-1) : -1;
-    const base = isCustom ? ALLOWED_DIRECT_EXAMS[idx] : undefined;
-    const label=isCustom? normalizeLabel(base?.label||'Exame') : (def?.label||'Exame');
-    const equivalence=isCustom? "—" : describeEquivalenceMap(def?.map);
-    const parcialCents=computeRowValue(r,prices);
-    const obsText=(r.obs??'').trim();
-    return {...r,label,equivalence,parcialCents,obsText};
-  }),[filtered,prices]);
+const RowEditor: React.FC<{
+  row: Row;
+  onChange: (row: Row) => void;
+  onRemove: () => void;
+}> = ({ row, onChange, onRemove }) => {
+  const handleQuantityChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const parsed = Number.parseInt(event.target.value, 10);
+    const safeValue = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+    onChange({ ...row, qty: safeValue });
+  };
 
-  // Tabela 2 — equivalências
-  const eqCounts=useMemo(()=> expandEquivalenceCounts(filtered),[filtered]);
-  const eqRows = useMemo(()=> BASE_KEYS
-      .map(key=> ({key, qty:eqCounts[key], cents:eqCounts[key]*prices[key]}))
-      .filter(r=>r.qty>0), [eqCounts,prices]);
+  const currentChange: PublicInterestChange = {
+    patientName: "",
+    requestedExam: "",
+    performedExam: "",
+    justification: "",
+    ...row.publicInterestChange,
+  };
 
-  // Tabela 3 — consolidado final (equivalências + diretos normalizados por label)
-  const consolidated = useMemo(()=>{
-    const acc: Record<string,{qty:number;cents:number}> = {};
-    // Equivalências entram pelo item-base
-    eqRows.forEach(e=>{ acc[e.key] = { qty: e.qty, cents: e.cents }; });
-    // Diretos: somar por label normalizado com seus preços
-    filtered.forEach(r=>{
-      const id = String(r.examId);
-      if (!id.startsWith("custom:")) return;
-      const idx = Number(id.split(":")[1]) - 1;
-      const base = ALLOWED_DIRECT_EXAMS[idx];
-      if (!base) return;
-      const label = normalizeLabel(base.label);
-      if (!acc[label]) acc[label] = { qty: 0, cents: 0 };
-      acc[label].qty += r.qty;
-      acc[label].cents += toCents(base.price) * r.qty;
+  const updatePublicInterestChange = (field: keyof PublicInterestChange, value: string) => {
+    const next = { ...currentChange, [field]: value };
+    const hasValues = Object.values(next).some((item) => item.trim() !== "");
+    onChange({
+      ...row,
+      publicInterestChange: hasValues ? next : undefined,
     });
-    const rows = Object.entries(acc).map(([label,v])=>({label, qty:v.qty, cents:v.cents})).sort((a,b)=> a.label.localeCompare(b.label));
-    const totalQty = rows.reduce((s,r)=>s+r.qty,0);
-    const totalCents = rows.reduce((s,r)=>s+r.cents,0);
-    return { rows, totalQty, totalCents };
-  },[eqRows, filtered]);
+  };
 
-  const printRef=useRef<HTMLDivElement>(null);
+  return (
+    <div className="grid grid-cols-12 gap-2 items-start">
+      <div className="col-span-8 space-y-2">
+        <select
+          className="w-full border rounded-lg px-2 py-2"
+          value={row.examId}
+          onChange={(event) => onChange({ ...row, examId: event.target.value as ExamId })}
+        >
+          <optgroup label="Equivalências">
+            {EXAMS.map((exam) => (
+              <option key={exam.id} value={exam.id}>
+                {exam.label}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="Outros exames (valor direto)">
+            {ALLOWED_DIRECT_EXAMS.map((exam, index) => (
+              <option key={exam.label} value={`custom:${index + 1}`}>
+                {normalizeLabel(exam.label)}
+              </option>
+            ))}
+          </optgroup>
+        </select>
 
-  return (<div className="min-h-screen">
-    <div className="no-print">
-      <div className="max-w-5xl mx-auto py-4 px-3">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-          <div className="border rounded-2xl p-4">
-            <h2 className="text-lg font-semibold mb-2">Unidade / Data</h2>
-            <div className="grid grid-cols-2 gap-2">
-              <select className="border rounded-lg px-2 py-2" value={currentClinicId} onChange={(e)=>setCurrentClinicId(e.target.value)}>
-                {clinics.map(c=> <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-              <input className="border rounded-lg px-2 py-2" type="date" value={filterDate} onChange={(e)=>setFilterDate(e.target.value)} />
+        <fieldset className="border border-slate-200 rounded-xl px-3 py-3 bg-slate-50">
+          <legend className="px-1 text-xs font-semibold text-slate-600">
+            Alterações no exame a favor do interesse público (opcional)
+          </legend>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              className="flex-1 min-w-[160px] border rounded-lg px-2 py-1 text-sm"
+              placeholder="Nome do paciente"
+              value={currentChange.patientName}
+              onChange={(event) => updatePublicInterestChange("patientName", event.target.value)}
+            />
+            <span className="text-base text-slate-500">→</span>
+            <input
+              type="text"
+              className="flex-1 min-w-[160px] border rounded-lg px-2 py-1 text-sm"
+              placeholder="Pedido médico"
+              value={currentChange.requestedExam}
+              onChange={(event) => updatePublicInterestChange("requestedExam", event.target.value)}
+            />
+            <span className="text-base text-slate-500">→</span>
+            <input
+              type="text"
+              className="flex-1 min-w-[160px] border rounded-lg px-2 py-1 text-sm"
+              placeholder="Exame realizado"
+              value={currentChange.performedExam}
+              onChange={(event) => updatePublicInterestChange("performedExam", event.target.value)}
+            />
+            <span className="text-base text-slate-500">→</span>
+            <input
+              type="text"
+              className="flex-1 min-w-[160px] border rounded-lg px-2 py-1 text-sm"
+              placeholder="Justificativa"
+              value={currentChange.justification}
+              onChange={(event) => updatePublicInterestChange("justification", event.target.value)}
+            />
+          </div>
+        </fieldset>
+      </div>
+      <input
+        type="number"
+        min={1}
+        className="col-span-2 border rounded-lg px-2 py-2 text-right"
+        value={row.qty}
+        onChange={handleQuantityChange}
+      />
+      <button type="button" className="col-span-2 text-red-600 hover:underline" onClick={onRemove}>
+        Remover
+      </button>
+    </div>
+  );
+};
+
+function createRow(clinicId: string, date: string): Row {
+  const id = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2);
+
+  return {
+    id,
+    clinicId,
+    date,
+    examId: "obst_rot",
+    qty: 1,
+  };
+}
+
+function buildDetailedRow(row: Row, prices: Prices): DetailedRow {
+  const isCustom = isCustomExamId(row.examId);
+  const definition = isCustom ? undefined : findExamById(row.examId);
+  const customExam = isCustom ? getCustomExamDefinition(row.examId) : undefined;
+
+  const label = isCustom ? normalizeLabel(customExam?.label ?? "Exame") : definition?.label ?? "Exame";
+  const equivalence = isCustom ? "—" : describeEquivalenceMap(definition?.map);
+  const partialCents = computeRowValue(row, prices);
+  const obsText = formatPublicInterestChange(row.publicInterestChange) || (row.obs ?? "").trim();
+
+  return { ...row, label, equivalence, partialCents, obsText };
+}
+
+export default function App() {
+  const today = new Date().toISOString().slice(0, 10);
+
+  const { prices } = usePrices();
+  const { clinics, currentClinicId, setCurrentClinicId } = useClinics();
+
+  const [rows, setRows] = useLocalStorage<Row[]>(STORAGE_KEYS.rows, [
+    createRow(DEFAULT_CLINICS[0]?.id ?? "cispara", today),
+  ]);
+  const [filterDate, setFilterDate] = useLocalStorage<string>(STORAGE_KEYS.filterDate, today);
+  const [reportNotes, setReportNotes] = useLocalStorage<Record<string, string>>(
+    STORAGE_KEYS.reportNotes,
+    {}
+  );
+
+  const printRef = useRef<HTMLDivElement>(null);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [exportLayout, setExportLayout] = useState<ExportLayout | null>(null);
+
+  const currentClinic = useMemo(
+    () => clinics.find((clinic) => clinic.id === currentClinicId),
+    [clinics, currentClinicId]
+  );
+
+  const filteredRows = useMemo(
+    () => rows.filter((row) => row.clinicId === currentClinicId && row.date === filterDate),
+    [rows, currentClinicId, filterDate]
+  );
+
+  const detailedRows = useMemo(
+    () => filteredRows.map((row) => buildDetailedRow(row, prices)),
+    [filteredRows, prices]
+  );
+
+  const detailMap = useMemo(() => new Map(detailedRows.map((row) => [row.id, row])), [detailedRows]);
+
+  const reportNotesKey = currentClinicId && filterDate ? `${currentClinicId}::${filterDate}` : "";
+  const currentNotes = reportNotesKey ? reportNotes[reportNotesKey] ?? "" : "";
+
+  const handleReportNotesChange = useCallback(
+    (value: string) => {
+      if (!reportNotesKey) return;
+      setReportNotes((previous) => {
+        const next = { ...previous };
+        if (value.trim()) {
+          next[reportNotesKey] = value;
+        } else {
+          delete next[reportNotesKey];
+        }
+        return next;
+      });
+    },
+    [reportNotesKey, setReportNotes]
+  );
+
+  const noteLines = useMemo(
+    () =>
+      currentNotes
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+    [currentNotes]
+  );
+
+  const equivalenceCounts = useMemo(() => expandEquivalenceCounts(filteredRows), [filteredRows]);
+
+  const equivalenceRows = useMemo(
+    () =>
+      BASE_KEYS.map((key) => ({
+        key,
+        qty: equivalenceCounts[key],
+        cents: equivalenceCounts[key] * prices[key],
+      })).filter((row) => row.qty > 0),
+    [equivalenceCounts, prices]
+  );
+
+  const consolidated = useMemo(() => {
+    const accumulator = new Map<string, { qty: number; cents: number }>();
+
+    equivalenceRows.forEach((row) => {
+      accumulator.set(row.key, { qty: row.qty, cents: row.cents });
+    });
+
+    filteredRows.forEach((row) => {
+      if (!isCustomExamId(row.examId)) return;
+      const custom = getCustomExamDefinition(row.examId);
+      if (!custom) return;
+
+      const label = normalizeLabel(custom.label);
+      const entry = accumulator.get(label) ?? { qty: 0, cents: 0 };
+      entry.qty += row.qty;
+      entry.cents += toCents(custom.price) * row.qty;
+      accumulator.set(label, entry);
+    });
+
+    const entries = Array.from(accumulator.entries())
+      .map(([label, value]) => ({ label, qty: value.qty, cents: value.cents }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+
+    const totalQty = entries.reduce((sum, row) => sum + row.qty, 0);
+    const totalCents = entries.reduce((sum, row) => sum + row.cents, 0);
+
+    return { rows: entries, totalQty, totalCents };
+  }, [equivalenceRows, filteredRows]);
+
+  const hasDataForExport = filterDate !== "" && filteredRows.length > 0;
+  const isConsolidatedLayout = exportLayout === "consolidated";
+  const isGeneratingFullPdf = isGeneratingPdf && exportLayout === "full";
+  const isGeneratingConsolidatedPdf = isGeneratingPdf && exportLayout === "consolidated";
+
+  const handleRowChange = useCallback(
+    (updatedRow: Row) => {
+      setRows((previous) => previous.map((row) => (row.id === updatedRow.id ? updatedRow : row)));
+    },
+    [setRows]
+  );
+
+  const handleRowRemove = useCallback(
+    (id: string) => {
+      setRows((previous) => previous.filter((row) => row.id !== id));
+    },
+    [setRows]
+  );
+
+  const handleAddRow = useCallback(() => {
+    if (!currentClinicId) return;
+    const date = filterDate || today;
+    if (!filterDate) setFilterDate(date);
+
+    const newRow = createRow(currentClinicId, date);
+    setRows((previous) => [...previous, newRow]);
+  }, [currentClinicId, filterDate, setFilterDate, setRows, today]);
+
+  const handleDuplicateRow = useCallback(
+    (row: Row) => {
+      const newRow = { ...row, id: createRow(row.clinicId, row.date).id };
+      setRows((previous) => [...previous, newRow]);
+    },
+    [setRows]
+  );
+
+  const generatePdf = useCallback(
+    async (layout: ExportLayout) => {
+      if (!hasDataForExport) return;
+
+      setIsGeneratingPdf(true);
+      setExportLayout(layout);
+
+      const waitForNextFrame = () =>
+        new Promise<void>((resolve) => {
+          if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+            window.requestAnimationFrame(() => resolve());
+          } else {
+            setTimeout(() => resolve(), 0);
+          }
+        });
+
+      await waitForNextFrame();
+      await waitForNextFrame();
+
+      try {
+        const element = printRef.current;
+        if (!element) return;
+
+        const canvas = await html2canvas(element, {
+          scale: 2,
+          backgroundColor: "#fff",
+          useCORS: true,
+        });
+
+        const image = canvas.toDataURL("image/png");
+        const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
+        const width = pdf.internal.pageSize.getWidth();
+        const height = pdf.internal.pageSize.getHeight();
+        const margin = 8;
+        const pageWidth = width - margin * 2;
+        const pageHeight = height - margin * 2;
+        const scale = Math.min(pageWidth / canvas.width, 1);
+        const renderWidth = canvas.width * scale;
+        const renderHeight = canvas.height * scale;
+        const sliceHeightPx = pageHeight / scale;
+
+        if (renderHeight <= pageHeight) {
+          pdf.addImage(
+            image,
+            "PNG",
+            (width - renderWidth) / 2,
+            (height - renderHeight) / 2,
+            renderWidth,
+            renderHeight,
+            undefined,
+            "FAST"
+          );
+        } else {
+          let offset = 0;
+          let pageIndex = 0;
+          const totalHeight = canvas.height;
+
+          while (offset < totalHeight) {
+            const currentSliceHeight = Math.min(sliceHeightPx, totalHeight - offset);
+            const sliceCanvas = document.createElement("canvas");
+            sliceCanvas.width = canvas.width;
+            sliceCanvas.height = currentSliceHeight;
+            const context = sliceCanvas.getContext("2d");
+
+            if (!context) {
+              throw new Error("Não foi possível preparar a página do PDF");
+            }
+
+            context.drawImage(
+              canvas,
+              0,
+              offset,
+              canvas.width,
+              currentSliceHeight,
+              0,
+              0,
+              canvas.width,
+              currentSliceHeight
+            );
+
+            const sliceImage = sliceCanvas.toDataURL("image/png");
+            if (pageIndex > 0) {
+              pdf.addPage();
+            }
+
+            pdf.addImage(
+              sliceImage,
+              "PNG",
+              (width - renderWidth) / 2,
+              margin,
+              renderWidth,
+              currentSliceHeight * scale,
+              undefined,
+              "FAST"
+            );
+
+            offset += currentSliceHeight;
+            pageIndex += 1;
+          }
+        }
+
+        const suffix = layout === "consolidated" ? "_procedimentos" : "";
+        pdf.save(`relatorio_exames_${fmtBRDate(filterDate)}${suffix}.pdf`);
+      } catch (error) {
+        console.error("Erro ao gerar PDF", error);
+        alert("Não foi possível gerar o PDF. Tente novamente.");
+      } finally {
+        setIsGeneratingPdf(false);
+        setExportLayout(null);
+      }
+    },
+    [filterDate, hasDataForExport]
+  );
+
+  return (
+    <div className="min-h-screen">
+      <div className="no-print">
+        <div className="max-w-5xl mx-auto py-4 px-3 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="border rounded-2xl p-4">
+              <h2 className="text-lg font-semibold mb-2">Unidade / Data</h2>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  className="border rounded-lg px-2 py-2"
+                  value={currentClinicId}
+                  onChange={(event) => setCurrentClinicId(event.target.value)}
+                >
+                  {clinics.map((clinic) => (
+                    <option key={clinic.id} value={clinic.id}>
+                      {clinic.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="border rounded-lg px-2 py-2"
+                  type="date"
+                  value={filterDate}
+                  onChange={(event) => setFilterDate(event.target.value)}
+                />
+              </div>
+            </div>
+            <div className="border rounded-2xl p-4">
+              <h2 className="text-lg font-semibold mb-2">Exportações</h2>
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!hasDataForExport || isGeneratingPdf}
+                  onClick={() => generatePdf("full")}
+                >
+                  {isGeneratingFullPdf ? "Gerando..." : "Gerar PDF completo"}
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!hasDataForExport || isGeneratingPdf}
+                  onClick={() => generatePdf("consolidated")}
+                >
+                  {isGeneratingConsolidatedPdf ? "Gerando..." : "Gerar PDF consolidado"}
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!hasDataForExport}
+                  onClick={() => exportCsv(detailedRows, clinics)}
+                >
+                  Exportar CSV
+                </button>
+              </div>
             </div>
           </div>
-          <div className="border rounded-2xl p-4">
-            <h2 className="text-lg font-semibold mb-2">Exportações</h2>
-            <div className="flex gap-2 flex-wrap">
-              <button className="px-3 py-2 rounded-lg border" disabled={!filterDate||filtered.length===0} onClick={async()=>{
-                if(!filterDate||!printRef.current||filtered.length===0) return;
-                const el=printRef.current;
-                const canvas=await html2canvas(el,{scale:2,backgroundColor:'#fff',useCORS:true});
-                const img=canvas.toDataURL('image/png');
-                const pdf=new jsPDF({orientation:'p',unit:'mm',format:'a4'});
-                const w=pdf.internal.pageSize.getWidth(), h=pdf.internal.pageSize.getHeight();
-                const m=8, maxW=w-2*m, maxH=h-2*m;
-                const r=Math.min(maxW/canvas.width,maxH/canvas.height);
-                const iw=canvas.width*r, ih=canvas.height*r;
-                pdf.addImage(img,'PNG',(w-iw)/2,(h-ih)/2,iw,ih,'','FAST');
-                pdf.save(`relatorio_exames_${fmtBRDate(filterDate)}.pdf`);
-              }}>Gerar PDF</button>
-              <button className="px-3 py-2 rounded-lg border" disabled={!filterDate||filtered.length===0} onClick={()=> exportCSV(filtered, clinics)}>Exportar CSV</button>
+
+          <div className="border rounded-2xl p-4 space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold">Lançamentos do dia selecionado</h2>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg border"
+                  onClick={handleAddRow}
+                  disabled={!currentClinicId}
+                >
+                  Adicionar exame
+                </button>
+                {filteredRows.length > 0 && (
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded-lg border"
+                    onClick={() => handleDuplicateRow(filteredRows[filteredRows.length - 1])}
+                  >
+                    Duplicar último
+                  </button>
+                )}
+              </div>
             </div>
+
+            {filteredRows.length === 0 ? (
+              <p className="text-sm text-zinc-500">
+                Nenhum lançamento para esta unidade/data. Clique em “Adicionar exame” para começar.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {filteredRows.map((row) => (
+                  <div key={row.id} className="border rounded-xl p-3">
+                    <RowEditor row={row} onChange={handleRowChange} onRemove={() => handleRowRemove(row.id)} />
+                    <div className="mt-2 text-sm text-zinc-500">
+                      Parcial calculado: {BRL(fromCents(detailMap.get(row.id)?.partialCents ?? 0))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="border rounded-2xl p-4 space-y-2">
+            <h2 className="text-lg font-semibold">Observações gerais do relatório</h2>
+            <p className="text-sm text-zinc-500">
+              Digite cada observação em uma nova linha para que o relatório apresente os tópicos ao final da última tabela.
+            </p>
+            <textarea
+              className="w-full border rounded-lg px-3 py-2 text-sm leading-relaxed min-h-[120px] disabled:opacity-50 disabled:cursor-not-allowed"
+              placeholder="Ex.: Ajuste realizado para paciente ..."
+              value={currentNotes}
+              disabled={!reportNotesKey}
+              onChange={(event) => handleReportNotesChange(event.target.value)}
+            />
           </div>
         </div>
       </div>
-    </div>
 
-    <div className="report-paper" ref={printRef}>
-      <header className="report-header">
-        <div className="flex items-center justify-center"><div className="report-logo flex items-center justify-center text-xs text-zinc-400">Logo</div></div>
-        <div className="flex flex-col -ml-16 md:ml-0">
-          <div className="report-title">Relatório de Procedimentos – Ultrassonografias</div>
-          <div className="report-subtitle">Dr. Andrew Costa – ECHO VITAE SERVIÇOS MÉDICOS LTDA (CNPJ 57.953.966/0001-60)</div>
+      <div className="report-paper" ref={printRef}>
+        <header className="report-header">
+          <div className="flex items-center justify-center">
+            <img
+              src={logoDrAndrewCosta}
+              alt="Logomarca Dr. Andrew Costa"
+              className="report-logo"
+            />
+          </div>
+          <div className="flex flex-col -ml-16 md:ml-0">
+            <div className="report-title">Relatório de Procedimentos – Ultrassonografias</div>
+            <div className="report-author">DR. ANDREW COSTA</div>
+            <div className="report-subtitle">
+              ECHO VITAE SERVIÇOS MÉDICOS LTDA (CNPJ 57.953.966/0001-60)
+            </div>
+          </div>
+        </header>
+        <div className="report-meta">
+          <div className="box">
+            <div className="label">Unidade</div>
+            <div className="value">{currentClinic?.name ?? "—"}</div>
+          </div>
+          <div className="box">
+            <div className="label">Local</div>
+            <div className="value">{currentClinic?.place ?? "—"}</div>
+          </div>
+          <div className="box">
+            <div className="label">Município</div>
+            <div className="value">{currentClinic?.city ?? "—"}</div>
+          </div>
+          <div className="box">
+            <div className="label">Data do atendimento</div>
+            <div className="value">{fmtBRDate(filterDate)}</div>
+          </div>
         </div>
-      </header>
-      <div className="report-meta">
-        <div className="box"><div className="label">Unidade</div><div className="value">{currentClinic?.name ?? "—"}</div></div>
-        <div className="box"><div className="label">Local</div><div className="value">{currentClinic?.place ?? "—"}</div></div>
-        <div className="box"><div className="label">Município</div><div className="value">{currentClinic?.city ?? "—"}</div></div>
-        <div className="box"><div className="label">Data do atendimento</div><div className="value">{fmtBRDate(filterDate)}</div></div>
+
+        {!isConsolidatedLayout && (
+          <section className="report-section">
+            <h2 className="report-section-title">Exames do dia</h2>
+            {detailedRows.length > 0 ? (
+              <div className="report-table-wrapper">
+                <table className="report-table" style={{ tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col />
+                    <col style={{ width: "38ch" }} />
+                    <col style={{ width: "64px" }} />
+                    <col />
+                    <col style={{ width: "110px" }} />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th>Tipo de exame</th>
+                      <th className="obs-col-header">Observações</th>
+                      <th className="right">Qtde</th>
+                      <th>Equivalência</th>
+                      <th className="right">Parcial</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detailedRows.map((row) => (
+                      <tr key={row.id}>
+                        <td>{row.label}</td>
+                        <td
+                          className="obs-col-cell"
+                          style={{ hyphens: "auto", overflowWrap: "anywhere", wordBreak: "break-word" }}
+                        >
+                          {row.obsText || "—"}
+                        </td>
+                        <td className="right">{row.qty}</td>
+                        <td>{row.equivalence}</td>
+                        <td className="right">{BRL(fromCents(row.partialCents))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="report-empty">Nenhum lançamento encontrado para a data selecionada.</p>
+            )}
+          </section>
+        )}
+
+        {!isConsolidatedLayout && (
+          <section className="report-section">
+            <h2 className="report-section-title">Equivalências de obstétricos, morfológicos e mamas</h2>
+            {equivalenceRows.length > 0 ? (
+              <div className="report-table-wrapper">
+                <table className="report-table">
+                  <thead>
+                    <tr>
+                      <th>Base</th>
+                      <th className="right">Quantidade</th>
+                      <th className="right">Valor total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {equivalenceRows.map((row) => (
+                      <tr key={row.key}>
+                        <td>{row.key}</td>
+                        <td className="right">{row.qty}</td>
+                        <td className="right">{BRL(fromCents(row.cents))}</td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td colSpan={2} className="right font-semibold">
+                        Total geral
+                      </td>
+                      <td className="right font-semibold">
+                        {BRL(fromCents(equivalenceRows.reduce((sum, current) => sum + current.cents, 0)))}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="report-empty">Ainda não há consolidação para esta unidade/data.</p>
+            )}
+          </section>
+        )}
+
+        <section className="report-section">
+          <h2 className="report-section-title">Relatório dos procedimentos realizados</h2>
+          {consolidated.rows.length > 0 ? (
+            <div className="report-table-wrapper">
+              <table className="report-table">
+                <thead>
+                  <tr>
+                    <th>Tipo</th>
+                    <th className="right">Quantidade</th>
+                    <th className="right">Subtotal</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {consolidated.rows.map((row) => (
+                    <tr key={row.label}>
+                      <td>{row.label}</td>
+                      <td className="right">{row.qty}</td>
+                      <td className="right">{BRL(fromCents(row.cents))}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td className="right font-semibold">Total geral</td>
+                    <td className="right font-semibold">{consolidated.totalQty}</td>
+                    <td className="right font-semibold">{BRL(fromCents(consolidated.totalCents))}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="report-empty">Sem dados para consolidar.</p>
+          )}
+        </section>
+
+        {noteLines.length > 0 && (
+          <section className="report-section">
+            <h2 className="report-section-title">Observações finais</h2>
+            <div className="report-notes-box">
+              <ul>
+                {noteLines.map((line, index) => (
+                  <li key={`${line}-${index}`}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          </section>
+        )}
+
+        <footer className="report-footer">
+          <p>
+            * Equivalências fixas: Obstétrico de rotina → 1× Abdominal total; Morfológico 1º trimestre → 1× Abdominal total + 1×
+            Rins e Vias; Morfológico do 2º trimestre → 1× Abdominal total + 1× Rins e Vias + 1× Transvaginal; Mamas/Mamas e Axilas
+            → 2× Rins e Vias.
+          </p>
+          <p className="report-footer-note">
+            Relatório gerado pelo sistema LILI® – Laudos Inteligentes. Criado e Desenvolvido pelo Dr. Andrew Costa.
+          </p>
+        </footer>
       </div>
-
-      {/* Tabela 1 */}
-      <section className="report-section">
-        <h2 className="report-section-title">Exames do dia</h2>
-        {filtered.length>0? (
-          <div className="report-table-wrapper">
-            <table className="report-table" style={{tableLayout:'fixed'}}>
-              <colgroup><col /><col style={{width:'38ch'}} /><col style={{width:'64px'}} /><col /><col style={{width:'110px'}} /></colgroup>
-              <thead><tr><th>Tipo de exame</th><th>Observações</th><th className="right">Qtde</th><th>Equivalência</th><th className="right">Parcial</th></tr></thead>
-              <tbody>
-                {filtered.map(r=>{
-                  const d=detailRows.find(x=>x.id===r.id)!;
-                  return (<tr key={r.id}>
-                    <td>{d.label}</td>
-                    <td style={{hyphens:'auto',overflowWrap:'anywhere',wordBreak:'break-word'}}>{d.obsText || "—"}</td>
-                    <td className="right">{d.qty}</td>
-                    <td>{d.equivalence}</td>
-                    <td className="right">{BRL(fromCents(d.parcialCents))}</td>
-                  </tr>);
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (<p className="report-empty">Nenhum lançamento encontrado para a data selecionada.</p>)}
-      </section>
-
-      {/* Tabela 2 */}
-      <section className="report-section">
-        <h2 className="report-section-title">Equivalências de obstétricos, morfológicos e mamas</h2>
-        {eqRows.length>0? (
-          <div className="report-table-wrapper">
-            <table className="report-table">
-              <thead><tr><th>Base</th><th className="right">Quantidade</th><th className="right">Valor total</th></tr></thead>
-              <tbody>{eqRows.map(e=>(<tr key={e.key}><td>{e.key}</td><td className="right">{e.qty}</td><td className="right">{BRL(fromCents(e.cents))}</td></tr>))}
-                <tr><td colSpan={2} className="right font-semibold">Total geral</td><td className="right font-semibold">{BRL(fromCents(eqRows.reduce((s,x)=>s+x.cents,0)))}</td></tr>
-              </tbody>
-            </table>
-          </div>
-        ):(<p className="report-empty">Ainda não há consolidação para esta unidade/data.</p>)}
-      </section>
-
-      {/* Tabela 3 */}
-      <section className="report-section">
-        <h2 className="report-section-title">Relatório Consolidado (por tipo de exame)</h2>
-        {consolidated.rows.length>0? (
-          <div className="report-table-wrapper">
-            <table className="report-table">
-              <thead><tr><th>Tipo</th><th className="right">Quantidade</th><th className="right">Subtotal</th></tr></thead>
-              <tbody>
-                {consolidated.rows.map(r=> (<tr key={r.label}><td>{r.label}</td><td className="right">{r.qty}</td><td className="right">{BRL(fromCents(r.cents))}</td></tr>))}
-                <tr><td className="right font-semibold">Total geral</td><td className="right font-semibold">{consolidated.totalQty}</td><td className="right font-semibold">{BRL(fromCents(consolidated.totalCents))}</td></tr>
-              </tbody>
-            </table>
-          </div>
-        ):(<p className="report-empty">Sem dados para consolidar.</p>)}
-      </section>
-
-      <footer className="report-footer">
-        <p>* Equivalências fixas: Obstétrico de rotina → 1× Abdominal total; Morfológico 1º trimestre → 1× Abdominal total + 1× Rins e Vias; Morfológico do 2º trimestre → 1× Abdominal total + 1× Rins e Vias + 1× Transvaginal; Mamas/Mamas e Axilas → 2× Rins e Vias.</p>
-        <p className="report-footer-note">Relatório Gerado pelo sistema LILI – Laudos Inteligentes.</p>
-      </footer>
     </div>
-  </div>);
+  );
 }
