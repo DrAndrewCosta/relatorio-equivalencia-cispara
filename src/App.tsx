@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 
+import logoDrAndrewCosta from "./assets/dr-andrew-costa-logo.svg";
+
 type BaseKey = "Abdominal total" | "Rins e Vias" | "Transvaginal";
 type Prices = Record<BaseKey, number>;
 type EqMap = Partial<Record<BaseKey, number>>;
@@ -733,7 +735,11 @@ export default function App() {
       <div className="report-paper" ref={printRef}>
         <header className="report-header">
           <div className="flex items-center justify-center">
-            <div className="report-logo flex items-center justify-center text-xs text-zinc-400">Logo</div>
+            <img
+              src={logoDrAndrewCosta}
+              alt="Logomarca Dr. Andrew Costa"
+              className="report-logo"
+            />
           </div>
           <div className="flex flex-col -ml-16 md:ml-0">
             <div className="report-title">Relatório de Procedimentos – Ultrassonografias</div>
@@ -776,7 +782,7 @@ export default function App() {
                 <thead>
                   <tr>
                     <th>Tipo de exame</th>
-                    <th>Observações</th>
+                    <th className="obs-col-header">Observações</th>
                     <th className="right">Qtde</th>
                     <th>Equivalência</th>
                     <th className="right">Parcial</th>
@@ -786,7 +792,10 @@ export default function App() {
                   {detailedRows.map((row) => (
                     <tr key={row.id}>
                       <td>{row.label}</td>
-                      <td style={{ hyphens: "auto", overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                      <td
+                        className="obs-col-cell"
+                        style={{ hyphens: "auto", overflowWrap: "anywhere", wordBreak: "break-word" }}
+                      >
                         {row.obsText || "—"}
                       </td>
                       <td className="right">{row.qty}</td>
@@ -892,7 +901,9 @@ export default function App() {
             Rins e Vias; Morfológico do 2º trimestre → 1× Abdominal total + 1× Rins e Vias + 1× Transvaginal; Mamas/Mamas e Axilas
             → 2× Rins e Vias.
           </p>
-          <p className="report-footer-note">Relatório Gerado pelo sistema LILI – Laudos Inteligentes.</p>
+          <p className="report-footer-note">
+            Relatório gerado pelo sistema LILI® – Laudos Inteligentes. Criado e Desenvolvido pelo Dr. Andrew Costa.
+          </p>
         </footer>
       </div>
     </div>

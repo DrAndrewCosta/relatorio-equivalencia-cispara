@@ -15,7 +15,7 @@ body{color:#0a0a0a;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:gr
 }
 
 .report-header{display:grid;grid-template-columns:72px 1fr;grid-gap:12px;align-items:center;margin-bottom:12px}
-.report-logo{width:72px;height:72px;border-radius:50%;object-fit:contain;border:1px solid #d4d4d8;background:#fff}
+.report-logo{width:72px;height:72px;border-radius:50%;object-fit:contain;border:1px solid #d4d4d8;background:#fff;padding:8px}
 .report-title{font-size:1rem;font-weight:700;text-align:center}
 .report-subtitle{font-size:.75rem;color:#52525b;text-align:center}
 
@@ -35,10 +35,12 @@ body{color:#0a0a0a;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:gr
 .right{text-align:right}
 
 .obs-col{width:38ch;max-width:38ch;white-space:normal;overflow-wrap:anywhere;word-break:break-word;hyphens:auto}
+.obs-col-header{font-size:.75rem}
+.obs-col-cell{font-size:.72rem;line-height:1.3}
 
 .report-notes-box{border:1px solid #d4d4d8;border-radius:12px;padding:8px 12px;background:#f8fafc;font-size:.78rem;min-height:96px}
 .report-notes-box ul{margin:0;padding-left:1.25rem;list-style:disc;display:grid;gap:4px}
 .report-notes-placeholder{min-height:72px}
 
-.report-footer{margin-top:10px;font-size:.65rem;color:#e2e8f0}
+.report-footer{margin-top:10px;font-size:.63rem;color:#94a3b8;text-align:center}
 .report-footer p{margin-bottom:4px}
