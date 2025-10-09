@@ -2,11 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
-@page { size: A4; margin: 12mm 10mm; }
+@page { size: A4 portrait; margin: 0; }
 html,body,#root{height:100%}
-body{color:#0a0a0a;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;font-size:.9rem}
+body{color:#0a0a0a;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;font-size:.9rem;background:#f4f4f5}
 
-.report-paper{width:100%;max-width:800px;margin:24px auto;background:#fff;border:1px solid #e4e4e7;border-radius:16px;box-shadow:0 10px 24px rgba(0,0,0,.06);padding:20px;font-size:.85rem}
+.report-paper{box-sizing:border-box;width:100%;max-width:880px;margin:24px auto;background:#fff;border:1px solid #e4e4e7;border-radius:16px;box-shadow:0 10px 24px rgba(0,0,0,.06);padding:24px;font-size:.85rem}
 @media print{
   body{background:#fff !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .no-print{display:none !important}
@@ -14,19 +14,20 @@ body{color:#0a0a0a;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:gr
     box-shadow:none !important;
     border:none !important;
     max-width:none !important;
-    width:190mm !important;
+    width:210mm !important;
     margin:0 auto !important;
-    padding:12mm 10mm !important;
+    padding:12mm 14mm !important;
   }
   .report-table-wrapper{overflow:visible;break-inside:avoid;page-break-inside:avoid}
   .report-section,.report-header,.report-footer,.report-notes-box{page-break-inside:avoid;break-inside:avoid}
   .report-table,.report-table thead,.report-table tbody,.report-table tr,.report-table th,.report-table td{page-break-inside:avoid;break-inside:avoid}
   .report-table thead{display:table-header-group}
+  .report-table tfoot{display:table-footer-group}
 }
 
 .report-header{display:grid;grid-template-columns:96px 1fr;grid-gap:12px;align-items:center;margin-bottom:12px}
 .report-logo-frame{width:96px;height:96px;border-radius:9999px;border:1px solid #d4d4d8;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden}
-.report-logo{width:80%;height:80%;object-fit:contain}
+.report-logo{width:72px;height:72px;object-fit:contain}
 .report-title{font-size:1rem;font-weight:700;text-align:center}
 .report-author{font-size:.82rem;font-weight:600;letter-spacing:.12em;text-align:center;margin-top:2px}
 .report-subtitle{font-size:.75rem;color:#52525b;text-align:center}
@@ -40,17 +41,19 @@ body{color:#0a0a0a;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:gr
 .report-section-title{font-weight:700;margin-bottom:6px;font-size:.85rem}
 
 .report-table-wrapper{border:1px solid #d4d4d8;border-radius:12px;overflow:hidden}
-.report-table{width:100%;border-collapse:collapse;font-size:.72rem}
-.report-table th,.report-table td{border-bottom:1px solid #e4e4e7;padding:4px 6px;vertical-align:top}
-.report-table .cell-placeholder{display:block;text-align:center;color:#94a3b8;font-weight:500}
+.report-table{width:100%;border-collapse:collapse;font-size:.74rem;table-layout:fixed}
+.report-table th,.report-table td{border-bottom:1px solid #e4e4e7;padding:6px 8px;vertical-align:top;line-height:1.35}
+.report-table tr{break-inside:avoid;page-break-inside:avoid}
+.report-table .cell-placeholder{display:flex;align-items:center;justify-content:center;color:#94a3b8;font-weight:500;min-height:1.35em}
 .report-table thead th{background:#f1f5f9;font-weight:700}
 .report-table tbody tr:last-child td{border-bottom:none}
+.report-table tfoot td{background:#f8fafc;font-weight:600}
 .right{text-align:right}
 .center{text-align:center}
 
 .obs-col{width:38ch;max-width:38ch;white-space:normal;overflow-wrap:anywhere;word-break:break-word;hyphens:auto}
+.obs-col-text{display:block;white-space:pre-wrap}
 .obs-col-header{font-size:.75rem}
-.obs-col-cell{font-size:.72rem;line-height:1.3}
 
 .report-notes-box{border:1px solid #d4d4d8;border-radius:12px;padding:8px 12px;background:#f8fafc;font-size:.78rem;min-height:96px}
 .report-notes-box ul{margin:0;padding-left:1.25rem;list-style:disc;display:grid;gap:4px}

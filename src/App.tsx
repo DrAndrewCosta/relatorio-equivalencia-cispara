@@ -567,6 +567,10 @@ export default function App() {
   }, [equivalenceRows, filteredRows]);
 
   const hasDataForExport = filterDate !== "" && filteredRows.length > 0;
+  const totalPartialCents = useMemo(
+    () => detailedRows.reduce((sum, row) => sum + row.partialCents, 0),
+    [detailedRows]
+  );
   const isConsolidatedLayout = exportLayout === "consolidated";
   const isGeneratingFullPdf = isGeneratingPdf && exportLayout === "full";
   const isGeneratingConsolidatedPdf = isGeneratingPdf && exportLayout === "consolidated";
@@ -628,7 +632,7 @@ export default function App() {
         const { html2canvas, JsPDF } = await loadExportModules();
 
         const canvas = await html2canvas(element, {
-          scale: 2,
+          scale: Math.min(3, window.devicePixelRatio ? Math.max(2, window.devicePixelRatio) : 2),
           backgroundColor: "#fff",
           useCORS: true,
         });
@@ -637,22 +641,54 @@ export default function App() {
         const pdf = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
         const width = pdf.internal.pageSize.getWidth();
         const height = pdf.internal.pageSize.getHeight();
-        const margin = 8;
-        const pageWidth = width - margin * 2;
-        const pageHeight = height - margin * 2;
-        const renderWidth = pageWidth;
+        const renderWidth = width;
         const renderHeight = (canvas.height / canvas.width) * renderWidth;
 
+        const elementRect = element.getBoundingClientRect();
+        const scaleY = elementRect.height > 0 ? canvas.height / elementRect.height : 1;
+        const anchorElements = Array.from(
+          element.querySelectorAll<HTMLElement>("[data-break-anchor]")
+        );
+        const safeBreaks = anchorElements
+          .map((anchor) => {
+            const rect = anchor.getBoundingClientRect();
+            return Math.round((rect.bottom - elementRect.top) * scaleY);
+          })
+          .filter((value) => value > 0 && value < canvas.height)
+          .sort((a, b) => a - b);
+
+        if (safeBreaks[safeBreaks.length - 1] !== canvas.height) {
+          safeBreaks.push(canvas.height);
+        }
+
+        const pxPerMm = canvas.width / renderWidth;
+        const pageHeight = height;
+        const pageHeightPx = pageHeight * pxPerMm;
+
         if (renderHeight <= pageHeight) {
-          pdf.addImage(image, "PNG", margin, margin, renderWidth, renderHeight, undefined, "FAST");
+          pdf.addImage(image, "PNG", 0, 0, renderWidth, renderHeight, undefined, "FAST");
         } else {
-          const pxPerMm = canvas.width / renderWidth;
-          const sliceHeightPx = pageHeight * pxPerMm;
           let offsetPx = 0;
           let pageIndex = 0;
 
           while (offsetPx < canvas.height) {
-            const currentSliceHeightPx = Math.min(sliceHeightPx, canvas.height - offsetPx);
+            const targetPx = offsetPx + pageHeightPx;
+            const minimumSlicePx = 48;
+            let breakPx: number | null = null;
+
+            for (let index = safeBreaks.length - 1; index >= 0; index -= 1) {
+              const candidate = safeBreaks[index];
+              if (candidate <= targetPx && candidate >= offsetPx + minimumSlicePx) {
+                breakPx = candidate;
+                break;
+              }
+            }
+
+            if (!breakPx) {
+              breakPx = Math.min(targetPx, canvas.height);
+            }
+
+            const currentSliceHeightPx = Math.min(Math.ceil(breakPx - offsetPx), canvas.height - offsetPx);
             const sliceCanvas = document.createElement("canvas");
             sliceCanvas.width = canvas.width;
             sliceCanvas.height = currentSliceHeightPx;
@@ -681,7 +717,7 @@ export default function App() {
               pdf.addPage();
             }
 
-            pdf.addImage(sliceImage, "PNG", margin, margin, renderWidth, sliceHeightMm, undefined, "FAST");
+            pdf.addImage(sliceImage, "PNG", 0, 0, renderWidth, sliceHeightMm, undefined, "FAST");
 
             offsetPx += currentSliceHeightPx;
             pageIndex += 1;
@@ -826,7 +862,7 @@ export default function App() {
       </div>
 
       <div className="report-paper" ref={printRef}>
-        <header className="report-header">
+        <header className="report-header" data-break-anchor>
           <div className="flex items-center justify-center">
             <div className="report-logo-frame">
               <img
@@ -836,7 +872,7 @@ export default function App() {
               />
             </div>
           </div>
-          <div className="flex flex-col -ml-16 md:ml-0">
+          <div className="flex flex-col items-center text-center gap-1">
             <div className="report-title">Relatório de Procedimentos – Ultrassonografias</div>
             <div className="report-author">DR. ANDREW COSTA</div>
             <div className="report-subtitle">
@@ -844,7 +880,7 @@ export default function App() {
             </div>
           </div>
         </header>
-        <div className="report-meta">
+        <div className="report-meta" data-break-anchor>
           <div className="box">
             <div className="label">Unidade</div>
             <div className="value">{currentClinic?.name ?? "—"}</div>
@@ -864,14 +900,14 @@ export default function App() {
         </div>
 
         {!isConsolidatedLayout && (
-          <section className="report-section">
+          <section className="report-section" data-break-anchor>
             <h2 className="report-section-title">Exames do dia</h2>
             {detailedRows.length > 0 ? (
               <div className="report-table-wrapper">
-                <table className="report-table" style={{ tableLayout: "fixed" }}>
+                <table className="report-table report-table--day" aria-label="Exames do dia">
                   <colgroup>
                     <col />
-                    <col style={{ width: "38ch" }} />
+                    <col className="obs-col" />
                     <col />
                     <col style={{ width: "64px" }} />
                     <col style={{ width: "110px" }} />
@@ -887,13 +923,14 @@ export default function App() {
                   </thead>
                   <tbody>
                     {detailedRows.map((row) => (
-                      <tr key={row.id}>
+                      <tr key={row.id} data-break-anchor>
                         <td className="center">{row.label}</td>
-                        <td
-                          className="obs-col-cell"
-                          style={{ hyphens: "auto", overflowWrap: "anywhere", wordBreak: "break-word" }}
-                        >
-                          {row.obsText ? row.obsText : <span className="cell-placeholder">—</span>}
+                        <td className="obs-col">
+                          {row.obsText ? (
+                            <span className="obs-col-text">{row.obsText}</span>
+                          ) : (
+                            <span className="cell-placeholder">—</span>
+                          )}
                         </td>
                         <td className="center">{row.equivalence}</td>
                         <td className="center">{row.qty}</td>
@@ -901,6 +938,14 @@ export default function App() {
                       </tr>
                     ))}
                   </tbody>
+                  <tfoot>
+                    <tr data-break-anchor>
+                      <td colSpan={4} className="right font-semibold">
+                        Total do dia
+                      </td>
+                      <td className="right font-semibold">{BRL(fromCents(totalPartialCents))}</td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             ) : (
@@ -910,11 +955,16 @@ export default function App() {
         )}
 
         {!isConsolidatedLayout && (
-          <section className="report-section">
+          <section className="report-section" data-break-anchor>
             <h2 className="report-section-title">Equivalências de obstétricos, morfológicos e mamas</h2>
             {equivalenceRows.length > 0 ? (
               <div className="report-table-wrapper">
-                <table className="report-table">
+                <table className="report-table" aria-label="Equivalências de obstétricos, morfológicos e mamas">
+                  <colgroup>
+                    <col />
+                    <col style={{ width: "90px" }} />
+                    <col style={{ width: "110px" }} />
+                  </colgroup>
                   <thead>
                     <tr>
                       <th className="center">Base</th>
@@ -924,13 +974,15 @@ export default function App() {
                   </thead>
                   <tbody>
                     {equivalenceRows.map((row) => (
-                      <tr key={row.key}>
+                      <tr key={row.key} data-break-anchor>
                         <td className="center">{row.key}</td>
                         <td className="center">{row.qty}</td>
                         <td className="right">{BRL(fromCents(row.cents))}</td>
                       </tr>
                     ))}
-                    <tr>
+                  </tbody>
+                  <tfoot>
+                    <tr data-break-anchor>
                       <td colSpan={2} className="right font-semibold">
                         Total geral
                       </td>
@@ -938,7 +990,7 @@ export default function App() {
                         {BRL(fromCents(equivalenceRows.reduce((sum, current) => sum + current.cents, 0)))}
                       </td>
                     </tr>
-                  </tbody>
+                  </tfoot>
                 </table>
               </div>
             ) : (
@@ -947,11 +999,16 @@ export default function App() {
           </section>
         )}
 
-        <section className="report-section">
+        <section className="report-section" data-break-anchor>
           <h2 className="report-section-title">Relatório dos procedimentos realizados</h2>
           {consolidated.rows.length > 0 ? (
             <div className="report-table-wrapper">
-              <table className="report-table">
+              <table className="report-table" aria-label="Relatório dos procedimentos realizados">
+                <colgroup>
+                  <col />
+                  <col style={{ width: "90px" }} />
+                  <col style={{ width: "110px" }} />
+                </colgroup>
                 <thead>
                   <tr>
                     <th className="center">Tipo</th>
@@ -961,18 +1018,20 @@ export default function App() {
                 </thead>
                 <tbody>
                   {consolidated.rows.map((row) => (
-                    <tr key={row.label}>
+                    <tr key={row.label} data-break-anchor>
                       <td className="center">{row.label}</td>
                       <td className="center">{row.qty}</td>
                       <td className="right">{BRL(fromCents(row.cents))}</td>
                     </tr>
                   ))}
-                  <tr>
+                </tbody>
+                <tfoot>
+                  <tr data-break-anchor>
                     <td className="right font-semibold">Total geral</td>
                     <td className="center font-semibold">{consolidated.totalQty}</td>
                     <td className="right font-semibold">{BRL(fromCents(consolidated.totalCents))}</td>
                   </tr>
-                </tbody>
+                </tfoot>
               </table>
             </div>
           ) : (
@@ -981,9 +1040,9 @@ export default function App() {
         </section>
 
         {noteLines.length > 0 && (
-          <section className="report-section">
+          <section className="report-section" data-break-anchor>
             <h2 className="report-section-title">Observações finais</h2>
-            <div className="report-notes-box">
+            <div className="report-notes-box" data-break-anchor>
               <ul>
                 {noteLines.map((line, index) => (
                   <li key={`${line}-${index}`}>{line}</li>
@@ -993,7 +1052,7 @@ export default function App() {
           </section>
         )}
 
-        <footer className="report-footer">
+        <footer className="report-footer" data-break-anchor>
           <p>
             * Equivalências fixas: Obstétrico de rotina → 1× Abdominal total; Morfológico 1º trimestre → 1× Abdominal total + 1×
             Rins e Vias; Morfológico do 2º trimestre → 1× Abdominal total + 1× Rins e Vias + 1× Transvaginal; Mamas/Mamas e Axilas
