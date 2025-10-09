@@ -889,16 +889,16 @@ export default function App() {
                   <colgroup>
                     <col />
                     <col style={{ width: "38ch" }} />
-                    <col style={{ width: "64px" }} />
                     <col />
+                    <col style={{ width: "64px" }} />
                     <col style={{ width: "110px" }} />
                   </colgroup>
                   <thead>
                     <tr>
                       <th>Tipo de exame</th>
                       <th className="obs-col-header">Observações</th>
-                      <th className="right">Qtde</th>
                       <th>Equivalência</th>
+                      <th className="right">Qtde</th>
                       <th className="right">Parcial</th>
                     </tr>
                   </thead>
@@ -912,8 +912,8 @@ export default function App() {
                         >
                           {row.obsText || "—"}
                         </td>
-                        <td className="right">{row.qty}</td>
                         <td>{row.equivalence}</td>
+                        <td className="right">{row.qty}</td>
                         <td className="right">{BRL(fromCents(row.partialCents))}</td>
                       </tr>
                     ))}
