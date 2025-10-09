@@ -845,11 +845,13 @@ export default function App() {
       <div className="report-paper" ref={printRef}>
         <header className="report-header">
           <div className="flex items-center justify-center">
-            <img
-              src={logoDrAndrewCosta}
-              alt="Logomarca Dr. Andrew Costa"
-              className="report-logo"
-            />
+            <div className="report-logo-frame">
+              <img
+                src={logoDrAndrewCosta}
+                alt="Logomarca Dr. Andrew Costa"
+                className="report-logo"
+              />
+            </div>
           </div>
           <div className="flex flex-col -ml-16 md:ml-0">
             <div className="report-title">Relatório de Procedimentos – Ultrassonografias</div>
