@@ -645,13 +645,13 @@ export default function App() {
 
         const pdf = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
         const pdfWidth = pdf.internal.pageSize.getWidth();
-        const sourceWidth = Math.max(element.scrollWidth, element.clientWidth, element.offsetWidth);
+        const pdfPixelWidth = Math.round((pdfWidth / 25.4) * 96);
 
         const wrapper = document.createElement("div");
         wrapper.style.position = "fixed";
         wrapper.style.inset = "0";
         wrapper.style.left = "-10000px";
-        wrapper.style.width = `${sourceWidth}px`;
+        wrapper.style.width = `${pdfPixelWidth}px`;
         wrapper.style.pointerEvents = "none";
 
         const clone = element.cloneNode(true) as HTMLElement;
@@ -664,10 +664,10 @@ export default function App() {
 
         await new Promise<void>((resolve, reject) => {
           const options: any = {
-            margin: [10, 12, 14, 12],
+            margin: [0, 0, 0, 0],
             autoPaging: "text",
-            width: pdfWidth - 24,
-            windowWidth: sourceWidth,
+            width: pdfWidth,
+            windowWidth: pdfPixelWidth,
             html2canvas: {
               scale: Math.min(3, window.devicePixelRatio ? Math.max(2, window.devicePixelRatio) : 2),
               useCORS: true,
@@ -676,10 +676,11 @@ export default function App() {
                 const clonedPaper = doc.querySelector<HTMLElement>(".report-paper[data-pdf-clone='true']");
                 if (clonedPaper) {
                   clonedPaper.style.maxWidth = "none";
-                  clonedPaper.style.width = "100%";
+                  clonedPaper.style.width = "210mm";
                   clonedPaper.style.border = "none";
                   clonedPaper.style.boxShadow = "none";
                   clonedPaper.style.margin = "0 auto";
+                  clonedPaper.style.padding = "12mm 14mm";
                 }
               },
             },

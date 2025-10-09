@@ -7,7 +7,7 @@ html,body,#root{height:100%}
 body{color:#0a0a0a;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;font-size:.9rem;background:#f4f4f5}
 
 .report-paper{box-sizing:border-box;width:100%;max-width:880px;margin:24px auto;background:#fff;border:1px solid #e4e4e7;border-radius:16px;box-shadow:0 10px 24px rgba(0,0,0,.06);padding:24px;font-size:.85rem}
-.report-paper[data-pdf-clone=true]{box-shadow:none !important;border:none !important;max-width:none !important;margin:0 auto !important;width:100% !important}
+.report-paper[data-pdf-clone=true]{box-shadow:none !important;border:none !important;max-width:none !important;margin:0 auto !important;width:210mm !important;padding:12mm 14mm !important}
 @media print{
   body{background:#fff !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .no-print{display:none !important}
