@@ -1,6 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import html2canvas from "html2canvas";
-import jsPDF from "jspdf";
 
 import logoDrAndrewCosta from "./assets/dr-andrew-costa-logo.svg";
 
@@ -84,6 +82,23 @@ const ALLOWED_DIRECT_EXAMS = [
 ] as const;
 
 const EXAMS_BY_ID = new Map(EXAMS.map((exam) => [exam.id, exam] as const));
+
+type Html2Canvas = typeof import("html2canvas").default;
+type JsPDFConstructor = typeof import("jspdf").default;
+
+let exportModulesPromise:
+  | Promise<{ html2canvas: Html2Canvas; JsPDF: JsPDFConstructor }>
+  | null = null;
+
+async function loadExportModules() {
+  if (!exportModulesPromise) {
+    exportModulesPromise = Promise.all([import("html2canvas"), import("jspdf")]).then(
+      ([{ default: html2canvas }, { default: JsPDF }]) => ({ html2canvas, JsPDF })
+    );
+  }
+
+  return exportModulesPromise;
+}
 
 function toCents(n: number): number {
   return Math.round(n * 100);
@@ -610,6 +625,8 @@ export default function App() {
         const element = printRef.current;
         if (!element) return;
 
+        const { html2canvas, JsPDF } = await loadExportModules();
+
         const canvas = await html2canvas(element, {
           scale: 2,
           backgroundColor: "#fff",
@@ -617,7 +634,7 @@ export default function App() {
         });
 
         const image = canvas.toDataURL("image/png");
-        const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
+        const pdf = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
         const width = pdf.internal.pageSize.getWidth();
         const height = pdf.internal.pageSize.getHeight();
         const margin = 8;
@@ -701,6 +718,10 @@ export default function App() {
     [filterDate, hasDataForExport]
   );
 
+  const prefetchExportModules = useCallback(() => {
+    void loadExportModules();
+  }, []);
+
   return (
     <div className="min-h-screen">
       <div className="no-print">
@@ -736,6 +757,8 @@ export default function App() {
                   className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={!hasDataForExport || isGeneratingPdf}
                   onClick={() => generatePdf("full")}
+                  onPointerEnter={prefetchExportModules}
+                  onFocus={prefetchExportModules}
                 >
                   {isGeneratingFullPdf ? "Gerando..." : "Gerar PDF completo"}
                 </button>
@@ -744,6 +767,8 @@ export default function App() {
                   className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={!hasDataForExport || isGeneratingPdf}
                   onClick={() => generatePdf("consolidated")}
+                  onPointerEnter={prefetchExportModules}
+                  onFocus={prefetchExportModules}
                 >
                   {isGeneratingConsolidatedPdf ? "Gerando..." : "Gerar PDF consolidado"}
                 </button>
