@@ -644,7 +644,7 @@ export default function App() {
         const pdfDoc = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
         const pdfWidth = pdfDoc.internal.pageSize.getWidth();
         const pdfHeight = pdfDoc.internal.pageSize.getHeight();
-        const margin = 0;
+        const margin = 8;
         const contentWidth = pdfWidth - margin * 2;
         const contentHeight = pdfHeight - margin * 2;
         const html2canvasScale = Math.min(
@@ -666,7 +666,8 @@ export default function App() {
         const mmPerCanvasPixel = cssPixelToMm / canvasScale;
 
         const rawRenderWidthMm = canvas.width * mmPerCanvasPixel;
-        const fitScale = rawRenderWidthMm > 0 ? contentWidth / rawRenderWidthMm : 1;
+        const shouldShrinkToFit = rawRenderWidthMm > contentWidth;
+        const fitScale = shouldShrinkToFit && rawRenderWidthMm > 0 ? contentWidth / rawRenderWidthMm : 1;
         const effectiveMmPerPixel = mmPerCanvasPixel * fitScale;
         const renderWidth = rawRenderWidthMm * fitScale;
         const pageHeightPx = contentHeight / effectiveMmPerPixel;
