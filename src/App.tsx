@@ -90,6 +90,12 @@ let exportModulesPromise:
   | Promise<{ html2canvas: Html2Canvas; JsPDF: JsPDFConstructor }>
   | null = null;
 
+declare global {
+  interface Window {
+    html2canvas?: Html2Canvas;
+  }
+}
+
 async function loadExportModules() {
   if (!exportModulesPromise) {
     exportModulesPromise = Promise.all([import("html2canvas"), import("jspdf")]).then(
@@ -625,111 +631,82 @@ export default function App() {
       await waitForNextFrame();
       await waitForNextFrame();
 
+      let cleanup: (() => void) | null = null;
+
       try {
         const element = printRef.current;
         if (!element) return;
 
         const { html2canvas, JsPDF } = await loadExportModules();
 
-        const canvas = await html2canvas(element, {
-          scale: Math.min(3, window.devicePixelRatio ? Math.max(2, window.devicePixelRatio) : 2),
-          backgroundColor: "#fff",
-          useCORS: true,
-        });
+        if (typeof window !== "undefined" && !window.html2canvas) {
+          window.html2canvas = html2canvas;
+        }
 
-        const image = canvas.toDataURL("image/png");
         const pdf = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
-        const width = pdf.internal.pageSize.getWidth();
-        const height = pdf.internal.pageSize.getHeight();
-        const renderWidth = width;
-        const renderHeight = (canvas.height / canvas.width) * renderWidth;
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const sourceWidth = Math.max(element.scrollWidth, element.clientWidth, element.offsetWidth);
 
-        const elementRect = element.getBoundingClientRect();
-        const scaleY = elementRect.height > 0 ? canvas.height / elementRect.height : 1;
-        const anchorElements = Array.from(
-          element.querySelectorAll<HTMLElement>("[data-break-anchor]")
-        );
-        const safeBreaks = anchorElements
-          .map((anchor) => {
-            const rect = anchor.getBoundingClientRect();
-            return Math.round((rect.bottom - elementRect.top) * scaleY);
-          })
-          .filter((value) => value > 0 && value < canvas.height)
-          .sort((a, b) => a - b);
+        const wrapper = document.createElement("div");
+        wrapper.style.position = "fixed";
+        wrapper.style.inset = "0";
+        wrapper.style.left = "-10000px";
+        wrapper.style.width = `${sourceWidth}px`;
+        wrapper.style.pointerEvents = "none";
 
-        if (safeBreaks[safeBreaks.length - 1] !== canvas.height) {
-          safeBreaks.push(canvas.height);
-        }
+        const clone = element.cloneNode(true) as HTMLElement;
+        clone.setAttribute("data-pdf-clone", "true");
+        wrapper.appendChild(clone);
+        document.body.appendChild(wrapper);
+        cleanup = () => {
+          wrapper.remove();
+        };
 
-        const pxPerMm = canvas.width / renderWidth;
-        const pageHeight = height;
-        const pageHeightPx = pageHeight * pxPerMm;
-
-        if (renderHeight <= pageHeight) {
-          pdf.addImage(image, "PNG", 0, 0, renderWidth, renderHeight, undefined, "FAST");
-        } else {
-          let offsetPx = 0;
-          let pageIndex = 0;
-
-          while (offsetPx < canvas.height) {
-            const targetPx = offsetPx + pageHeightPx;
-            const minimumSlicePx = 48;
-            let breakPx: number | null = null;
-
-            for (let index = safeBreaks.length - 1; index >= 0; index -= 1) {
-              const candidate = safeBreaks[index];
-              if (candidate <= targetPx && candidate >= offsetPx + minimumSlicePx) {
-                breakPx = candidate;
-                break;
+        await new Promise<void>((resolve, reject) => {
+          const options: any = {
+            margin: [10, 12, 14, 12],
+            autoPaging: "text",
+            width: pdfWidth - 24,
+            windowWidth: sourceWidth,
+            html2canvas: {
+              scale: Math.min(3, window.devicePixelRatio ? Math.max(2, window.devicePixelRatio) : 2),
+              useCORS: true,
+              backgroundColor: "#ffffff",
+              onclone: (doc: Document) => {
+                const clonedPaper = doc.querySelector<HTMLElement>(".report-paper[data-pdf-clone='true']");
+                if (clonedPaper) {
+                  clonedPaper.style.maxWidth = "none";
+                  clonedPaper.style.width = "100%";
+                  clonedPaper.style.border = "none";
+                  clonedPaper.style.boxShadow = "none";
+                  clonedPaper.style.margin = "0 auto";
+                }
+              },
+            },
+            pagebreak: { mode: ["css", "legacy", "avoid-all"] },
+            callback: (doc: InstanceType<JsPDFConstructor>) => {
+              try {
+                const suffix = layout === "consolidated" ? "_procedimentos" : "";
+                doc.save(`relatorio_exames_${fmtBRDate(filterDate)}${suffix}.pdf`);
+                resolve();
+              } catch (error) {
+                reject(error);
               }
-            }
+            },
+          };
 
-            if (!breakPx) {
-              breakPx = Math.min(targetPx, canvas.height);
-            }
-
-            const currentSliceHeightPx = Math.min(Math.ceil(breakPx - offsetPx), canvas.height - offsetPx);
-            const sliceCanvas = document.createElement("canvas");
-            sliceCanvas.width = canvas.width;
-            sliceCanvas.height = currentSliceHeightPx;
-            const context = sliceCanvas.getContext("2d");
-
-            if (!context) {
-              throw new Error("Não foi possível preparar a página do PDF");
-            }
-
-            context.drawImage(
-              canvas,
-              0,
-              offsetPx,
-              canvas.width,
-              currentSliceHeightPx,
-              0,
-              0,
-              canvas.width,
-              currentSliceHeightPx
-            );
-
-            const sliceImage = sliceCanvas.toDataURL("image/png");
-            const sliceHeightMm = currentSliceHeightPx / pxPerMm;
-
-            if (pageIndex > 0) {
-              pdf.addPage();
-            }
-
-            pdf.addImage(sliceImage, "PNG", 0, 0, renderWidth, sliceHeightMm, undefined, "FAST");
-
-            offsetPx += currentSliceHeightPx;
-            pageIndex += 1;
-          }
-        }
-
-        const suffix = layout === "consolidated" ? "_procedimentos" : "";
-        pdf.save(`relatorio_exames_${fmtBRDate(filterDate)}${suffix}.pdf`);
+          (pdf as any)
+            .html(clone, options)
+            .then(() => {
+              /* no-op handled in callback */
+            })
+            .catch(reject);
+        });
       } catch (error) {
         console.error("Erro ao gerar PDF", error);
         alert("Não foi possível gerar o PDF. Tente novamente.");
       } finally {
+        if (cleanup) cleanup();
         setIsGeneratingPdf(false);
         setExportLayout(null);
       }
