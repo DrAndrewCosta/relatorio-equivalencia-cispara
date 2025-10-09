@@ -631,6 +631,8 @@ export default function App() {
       await waitForNextFrame();
       await waitForNextFrame();
 
+      let cleanup: (() => void) | null = null;
+
       try {
         const element = printRef.current;
         if (!element) return;
@@ -762,12 +764,71 @@ export default function App() {
           pageIndex += 1;
         }
 
-        const suffix = layout === "consolidated" ? "_procedimentos" : "";
-        pdf.save(`relatorio_exames_${fmtBRDate(filterDate)}${suffix}.pdf`);
+        const pdf = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfPixelWidth = Math.round((pdfWidth / 25.4) * 96);
+
+        const wrapper = document.createElement("div");
+        wrapper.style.position = "fixed";
+        wrapper.style.inset = "0";
+        wrapper.style.left = "-10000px";
+        wrapper.style.width = `${pdfPixelWidth}px`;
+        wrapper.style.pointerEvents = "none";
+
+        const clone = element.cloneNode(true) as HTMLElement;
+        clone.setAttribute("data-pdf-clone", "true");
+        wrapper.appendChild(clone);
+        document.body.appendChild(wrapper);
+        cleanup = () => {
+          wrapper.remove();
+        };
+
+        await new Promise<void>((resolve, reject) => {
+          const options: any = {
+            margin: [0, 0, 0, 0],
+            autoPaging: "text",
+            width: pdfWidth,
+            windowWidth: pdfPixelWidth,
+            html2canvas: {
+              scale: Math.min(3, window.devicePixelRatio ? Math.max(2, window.devicePixelRatio) : 2),
+              useCORS: true,
+              backgroundColor: "#ffffff",
+              onclone: (doc: Document) => {
+                const clonedPaper = doc.querySelector<HTMLElement>(".report-paper[data-pdf-clone='true']");
+                if (clonedPaper) {
+                  clonedPaper.style.maxWidth = "none";
+                  clonedPaper.style.width = "210mm";
+                  clonedPaper.style.border = "none";
+                  clonedPaper.style.boxShadow = "none";
+                  clonedPaper.style.margin = "0 auto";
+                  clonedPaper.style.padding = "12mm 14mm";
+                }
+              },
+            },
+            pagebreak: { mode: ["css", "legacy", "avoid-all"] },
+            callback: (doc: InstanceType<JsPDFConstructor>) => {
+              try {
+                const suffix = layout === "consolidated" ? "_procedimentos" : "";
+                doc.save(`relatorio_exames_${fmtBRDate(filterDate)}${suffix}.pdf`);
+                resolve();
+              } catch (error) {
+                reject(error);
+              }
+            },
+          };
+
+          (pdf as any)
+            .html(clone, options)
+            .then(() => {
+              /* no-op handled in callback */
+            })
+            .catch(reject);
+        });
       } catch (error) {
         console.error("Erro ao gerar PDF", error);
         alert("Não foi possível gerar o PDF. Tente novamente.");
       } finally {
+        if (cleanup) cleanup();
         setIsGeneratingPdf(false);
         setExportLayout(null);
       }
