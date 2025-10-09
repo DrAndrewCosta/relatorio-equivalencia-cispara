@@ -1,22 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc" preserveAspectRatio="xMidYMid meet">
   <title id="title">Logomarca Dr. Andrew Costa</title>
-  <desc id="desc">Três linhas douradas formando um monograma com o nome Dr. Andrew Costa e o slogan Ultrassonografia é Arte.</desc>
-  <defs>
-    <linearGradient id="gold" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#e9d3a0" />
-      <stop offset="100%" stop-color="#c9a15a" />
-    </linearGradient>
-  </defs>
-  <rect width="512" height="512" fill="#ffffff" rx="48" ry="48" />
-  <g fill="none" stroke="url(#gold)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" transform="translate(76 40)">
-    <path d="M180 32L0 392" />
-    <path d="M180 32l180 360" />
-    <path d="M98 216l82-184 82 184" />
+  <desc id="desc">Três linhas douradas formando um monograma triangular minimalista.</desc>
+  <g fill="none" stroke="#cbb27a" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M56 440L256 88l200 352" />
+    <path d="M124 344l132-232 132 232" />
+    <path d="M196 440l60-104 60 104" />
   </g>
-  <text x="256" y="398" font-size="52" font-family="'Playfair Display','Times New Roman',serif" text-anchor="middle" fill="#1f2937" letter-spacing="4">
-    DR. ANDREW COSTA
-  </text>
-  <text x="256" y="450" font-size="32" font-family="'Allura','Great Vibes','Pacifico',cursive" text-anchor="middle" fill="#1f2937">
-    Ultrassonografia é Arte.
-  </text>
 </svg>
