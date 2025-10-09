@@ -645,6 +645,127 @@ export default function App() {
 
         const pdf = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
         const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = pdf.internal.pageSize.getHeight();
+        const margin = 8;
+        const contentWidth = pdfWidth - margin * 2;
+        const contentHeight = pdfHeight - margin * 2;
+        const html2canvasScale = Math.min(
+          3,
+          typeof window !== "undefined" && window.devicePixelRatio
+            ? Math.max(2, window.devicePixelRatio)
+            : 2
+        );
+
+        const canvas = await html2canvas(element, {
+          scale: html2canvasScale,
+          backgroundColor: "#ffffff",
+          useCORS: true,
+        });
+
+        const elementRect = element.getBoundingClientRect();
+        const canvasScale = canvas.width / elementRect.width;
+        const anchors = Array.from(element.querySelectorAll<HTMLElement>("[data-break-anchor]"))
+          .map((anchor) => {
+            const anchorRect = anchor.getBoundingClientRect();
+            return Math.max(0, (anchorRect.top - elementRect.top) * canvasScale);
+          })
+          .sort((a, b) => a - b);
+
+        const scale = Math.min(contentWidth / canvas.width, 1);
+        const renderWidth = canvas.width * scale;
+        const pageHeightPx = contentHeight / scale;
+
+        const totalHeight = canvas.height;
+        let offset = 0;
+        let pageIndex = 0;
+        let anchorIndex = 0;
+
+        const minGapPx = 80 * canvasScale;
+        const keepBottomGapPx = 48 * canvasScale;
+
+        while (offset < totalHeight - 1) {
+          const pageLimit = offset + pageHeightPx;
+          let currentSliceHeight = Math.min(pageHeightPx, totalHeight - offset);
+
+          let bestBreak: number | null = null;
+          for (let index = anchorIndex; index < anchors.length; index += 1) {
+            const anchorOffset = anchors[index];
+            if (anchorOffset <= offset + minGapPx) {
+              anchorIndex = index + 1;
+              continue;
+            }
+            if (anchorOffset >= pageLimit - keepBottomGapPx) {
+              break;
+            }
+            bestBreak = anchorOffset;
+            anchorIndex = index + 1;
+          }
+
+          if (bestBreak !== null && bestBreak > offset) {
+            currentSliceHeight = Math.min(bestBreak - offset, currentSliceHeight);
+          }
+
+          if (currentSliceHeight <= 0) {
+            break;
+          }
+
+          const sliceCanvas = document.createElement("canvas");
+          sliceCanvas.width = canvas.width;
+          const sliceHeightPx = Math.min(currentSliceHeight, totalHeight - offset);
+          let roundedSliceHeightPx = Math.max(1, Math.ceil(sliceHeightPx));
+          if (offset + roundedSliceHeightPx > totalHeight) {
+            roundedSliceHeightPx = totalHeight - offset;
+          }
+          if (roundedSliceHeightPx <= 0) {
+            break;
+          }
+          sliceCanvas.height = roundedSliceHeightPx;
+          const context = sliceCanvas.getContext("2d");
+
+          if (!context) {
+            throw new Error("Não foi possível preparar a página do PDF");
+          }
+
+          context.drawImage(
+            canvas,
+            0,
+            offset,
+            canvas.width,
+            sliceCanvas.height,
+            0,
+            0,
+            canvas.width,
+            sliceCanvas.height
+          );
+
+          const sliceImage = sliceCanvas.toDataURL("image/png");
+
+          if (pageIndex > 0) {
+            pdf.addPage();
+          }
+
+          const sliceHeightMm = sliceCanvas.height * scale;
+          const positionY = pageIndex === 0 && sliceHeightMm < contentHeight
+            ? (pdfHeight - sliceHeightMm) / 2
+            : margin;
+
+          pdf.addImage(
+            sliceImage,
+            "PNG",
+            (pdfWidth - renderWidth) / 2,
+            positionY,
+            renderWidth,
+            sliceHeightMm,
+            undefined,
+            "FAST"
+          );
+
+          offset += sliceCanvas.height;
+          pageIndex += 1;
+        }
+
+        const pdf = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
+        const pdfWidth = pdf.internal.pageSize.getWidth();
         const pdfPixelWidth = Math.round((pdfWidth / 25.4) * 96);
 
         const wrapper = document.createElement("div");
