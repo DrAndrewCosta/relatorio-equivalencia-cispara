@@ -663,17 +663,22 @@ export default function App() {
         });
 
         const elementRect = element.getBoundingClientRect();
-        const canvasScale = canvas.width / elementRect.width;
+        const canvasScale = elementRect.width > 0 ? canvas.width / elementRect.width : html2canvasScale;
+        const cssPixelToMm = 25.4 / 96; // 1 CSS px in millimetres
+        const mmPerCanvasPixel = cssPixelToMm / canvasScale;
+
+        const rawRenderWidthMm = canvas.width * mmPerCanvasPixel;
+        const fitScale = rawRenderWidthMm > 0 ? Math.min(contentWidth / rawRenderWidthMm, 1) : 1;
+        const effectiveMmPerPixel = mmPerCanvasPixel * fitScale;
+        const renderWidth = rawRenderWidthMm * fitScale;
+        const pageHeightPx = contentHeight / effectiveMmPerPixel;
+
         const anchors = Array.from(element.querySelectorAll<HTMLElement>("[data-break-anchor]"))
           .map((anchor) => {
             const anchorRect = anchor.getBoundingClientRect();
             return Math.max(0, (anchorRect.top - elementRect.top) * canvasScale);
           })
           .sort((a, b) => a - b);
-
-        const scale = Math.min(contentWidth / canvas.width, 1);
-        const renderWidth = canvas.width * scale;
-        const pageHeightPx = contentHeight / scale;
 
         const totalHeight = canvas.height;
         let offset = 0;
@@ -744,16 +749,14 @@ export default function App() {
             pdf.addPage();
           }
 
-          const sliceHeightMm = sliceCanvas.height * scale;
-          const positionY = pageIndex === 0 && sliceHeightMm < contentHeight
-            ? (pdfHeight - sliceHeightMm) / 2
-            : margin;
+          const sliceHeightMm = sliceCanvas.height * effectiveMmPerPixel;
+          const positionX = margin + (contentWidth - renderWidth) / 2;
 
           pdf.addImage(
             sliceImage,
             "PNG",
-            (pdfWidth - renderWidth) / 2,
-            positionY,
+            positionX,
+            margin,
             renderWidth,
             sliceHeightMm,
             undefined,
