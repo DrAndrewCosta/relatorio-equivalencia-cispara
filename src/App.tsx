@@ -1,6 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import html2canvas from "html2canvas";
-import jsPDF from "jspdf";
 
 import logoDrAndrewCosta from "./assets/dr-andrew-costa-logo.svg";
 
@@ -46,7 +44,7 @@ const STORAGE_KEYS = {
 const BASE_KEYS: BaseKey[] = ["Abdominal total", "Rins e Vias", "Transvaginal"];
 
 const EXAMS: ReadonlyArray<{ id: ExamId; label: string; map: EqMap }> = [
-  { id: "obst_rot", label: "Obstétrico de rotina (pré-natal)", map: { "Abdominal total": 1 } },
+  { id: "obst_rot", label: "Obstétrico de rotina", map: { "Abdominal total": 1 } },
   {
     id: "morf_1tri",
     label: "Obstétrico morfológico (1º trimestre)",
@@ -84,6 +82,23 @@ const ALLOWED_DIRECT_EXAMS = [
 ] as const;
 
 const EXAMS_BY_ID = new Map(EXAMS.map((exam) => [exam.id, exam] as const));
+
+type Html2Canvas = typeof import("html2canvas").default;
+type JsPDFConstructor = typeof import("jspdf").default;
+
+let exportModulesPromise:
+  | Promise<{ html2canvas: Html2Canvas; JsPDF: JsPDFConstructor }>
+  | null = null;
+
+async function loadExportModules() {
+  if (!exportModulesPromise) {
+    exportModulesPromise = Promise.all([import("html2canvas"), import("jspdf")]).then(
+      ([{ default: html2canvas }, { default: JsPDF }]) => ({ html2canvas, JsPDF })
+    );
+  }
+
+  return exportModulesPromise;
+}
 
 function toCents(n: number): number {
   return Math.round(n * 100);
@@ -610,6 +625,8 @@ export default function App() {
         const element = printRef.current;
         if (!element) return;
 
+        const { html2canvas, JsPDF } = await loadExportModules();
+
         const canvas = await html2canvas(element, {
           scale: 2,
           backgroundColor: "#fff",
@@ -617,38 +634,28 @@ export default function App() {
         });
 
         const image = canvas.toDataURL("image/png");
-        const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
+        const pdf = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
         const width = pdf.internal.pageSize.getWidth();
         const height = pdf.internal.pageSize.getHeight();
         const margin = 8;
         const pageWidth = width - margin * 2;
         const pageHeight = height - margin * 2;
-        const scale = Math.min(pageWidth / canvas.width, 1);
-        const renderWidth = canvas.width * scale;
-        const renderHeight = canvas.height * scale;
-        const sliceHeightPx = pageHeight / scale;
+        const renderWidth = pageWidth;
+        const renderHeight = (canvas.height / canvas.width) * renderWidth;
 
         if (renderHeight <= pageHeight) {
-          pdf.addImage(
-            image,
-            "PNG",
-            (width - renderWidth) / 2,
-            (height - renderHeight) / 2,
-            renderWidth,
-            renderHeight,
-            undefined,
-            "FAST"
-          );
+          pdf.addImage(image, "PNG", margin, margin, renderWidth, renderHeight, undefined, "FAST");
         } else {
-          let offset = 0;
+          const pxPerMm = canvas.width / renderWidth;
+          const sliceHeightPx = pageHeight * pxPerMm;
+          let offsetPx = 0;
           let pageIndex = 0;
-          const totalHeight = canvas.height;
 
-          while (offset < totalHeight) {
-            const currentSliceHeight = Math.min(sliceHeightPx, totalHeight - offset);
+          while (offsetPx < canvas.height) {
+            const currentSliceHeightPx = Math.min(sliceHeightPx, canvas.height - offsetPx);
             const sliceCanvas = document.createElement("canvas");
             sliceCanvas.width = canvas.width;
-            sliceCanvas.height = currentSliceHeight;
+            sliceCanvas.height = currentSliceHeightPx;
             const context = sliceCanvas.getContext("2d");
 
             if (!context) {
@@ -658,32 +665,25 @@ export default function App() {
             context.drawImage(
               canvas,
               0,
-              offset,
+              offsetPx,
               canvas.width,
-              currentSliceHeight,
+              currentSliceHeightPx,
               0,
               0,
               canvas.width,
-              currentSliceHeight
+              currentSliceHeightPx
             );
 
             const sliceImage = sliceCanvas.toDataURL("image/png");
+            const sliceHeightMm = currentSliceHeightPx / pxPerMm;
+
             if (pageIndex > 0) {
               pdf.addPage();
             }
 
-            pdf.addImage(
-              sliceImage,
-              "PNG",
-              (width - renderWidth) / 2,
-              margin,
-              renderWidth,
-              currentSliceHeight * scale,
-              undefined,
-              "FAST"
-            );
+            pdf.addImage(sliceImage, "PNG", margin, margin, renderWidth, sliceHeightMm, undefined, "FAST");
 
-            offset += currentSliceHeight;
+            offsetPx += currentSliceHeightPx;
             pageIndex += 1;
           }
         }
@@ -700,6 +700,10 @@ export default function App() {
     },
     [filterDate, hasDataForExport]
   );
+
+  const prefetchExportModules = useCallback(() => {
+    void loadExportModules();
+  }, []);
 
   return (
     <div className="min-h-screen">
@@ -736,6 +740,8 @@ export default function App() {
                   className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={!hasDataForExport || isGeneratingPdf}
                   onClick={() => generatePdf("full")}
+                  onPointerEnter={prefetchExportModules}
+                  onFocus={prefetchExportModules}
                 >
                   {isGeneratingFullPdf ? "Gerando..." : "Gerar PDF completo"}
                 </button>
@@ -744,6 +750,8 @@ export default function App() {
                   className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={!hasDataForExport || isGeneratingPdf}
                   onClick={() => generatePdf("consolidated")}
+                  onPointerEnter={prefetchExportModules}
+                  onFocus={prefetchExportModules}
                 >
                   {isGeneratingConsolidatedPdf ? "Gerando..." : "Gerar PDF consolidado"}
                 </button>
@@ -820,11 +828,13 @@ export default function App() {
       <div className="report-paper" ref={printRef}>
         <header className="report-header">
           <div className="flex items-center justify-center">
-            <img
-              src={logoDrAndrewCosta}
-              alt="Logomarca Dr. Andrew Costa"
-              className="report-logo"
-            />
+            <div className="report-logo-frame">
+              <img
+                src={logoDrAndrewCosta}
+                alt="Logomarca Dr. Andrew Costa"
+                className="report-logo"
+              />
+            </div>
           </div>
           <div className="flex flex-col -ml-16 md:ml-0">
             <div className="report-title">Relatório de Procedimentos – Ultrassonografias</div>
@@ -862,31 +872,31 @@ export default function App() {
                   <colgroup>
                     <col />
                     <col style={{ width: "38ch" }} />
-                    <col style={{ width: "64px" }} />
                     <col />
+                    <col style={{ width: "64px" }} />
                     <col style={{ width: "110px" }} />
                   </colgroup>
                   <thead>
                     <tr>
-                      <th>Tipo de exame</th>
+                      <th className="center">Tipo de exame</th>
                       <th className="obs-col-header">Observações</th>
-                      <th className="right">Qtde</th>
-                      <th>Equivalência</th>
+                      <th className="center">Equivalência</th>
+                      <th className="center">Qtde</th>
                       <th className="right">Parcial</th>
                     </tr>
                   </thead>
                   <tbody>
                     {detailedRows.map((row) => (
                       <tr key={row.id}>
-                        <td>{row.label}</td>
+                        <td className="center">{row.label}</td>
                         <td
                           className="obs-col-cell"
                           style={{ hyphens: "auto", overflowWrap: "anywhere", wordBreak: "break-word" }}
                         >
-                          {row.obsText || "—"}
+                          {row.obsText ? row.obsText : <span className="cell-placeholder">—</span>}
                         </td>
-                        <td className="right">{row.qty}</td>
-                        <td>{row.equivalence}</td>
+                        <td className="center">{row.equivalence}</td>
+                        <td className="center">{row.qty}</td>
                         <td className="right">{BRL(fromCents(row.partialCents))}</td>
                       </tr>
                     ))}
@@ -907,16 +917,16 @@ export default function App() {
                 <table className="report-table">
                   <thead>
                     <tr>
-                      <th>Base</th>
-                      <th className="right">Quantidade</th>
+                      <th className="center">Base</th>
+                      <th className="center">Quantidade</th>
                       <th className="right">Valor total</th>
                     </tr>
                   </thead>
                   <tbody>
                     {equivalenceRows.map((row) => (
                       <tr key={row.key}>
-                        <td>{row.key}</td>
-                        <td className="right">{row.qty}</td>
+                        <td className="center">{row.key}</td>
+                        <td className="center">{row.qty}</td>
                         <td className="right">{BRL(fromCents(row.cents))}</td>
                       </tr>
                     ))}
@@ -944,22 +954,22 @@ export default function App() {
               <table className="report-table">
                 <thead>
                   <tr>
-                    <th>Tipo</th>
-                    <th className="right">Quantidade</th>
+                    <th className="center">Tipo</th>
+                    <th className="center">Quantidade</th>
                     <th className="right">Subtotal</th>
                   </tr>
                 </thead>
                 <tbody>
                   {consolidated.rows.map((row) => (
                     <tr key={row.label}>
-                      <td>{row.label}</td>
-                      <td className="right">{row.qty}</td>
+                      <td className="center">{row.label}</td>
+                      <td className="center">{row.qty}</td>
                       <td className="right">{BRL(fromCents(row.cents))}</td>
                     </tr>
                   ))}
                   <tr>
                     <td className="right font-semibold">Total geral</td>
-                    <td className="right font-semibold">{consolidated.totalQty}</td>
+                    <td className="center font-semibold">{consolidated.totalQty}</td>
                     <td className="right font-semibold">{BRL(fromCents(consolidated.totalCents))}</td>
                   </tr>
                 </tbody>
