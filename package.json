@@ -6,12 +6,13 @@
   "scripts": {
     "dev": "vite --port 5175",
     "build": "vite build",
+    "typecheck": "tsc --noEmit",
     "preview": "vite preview --port 5175",
     "archive": "bash scripts/create-archive.sh"
   },
   "dependencies": {
     "html2canvas": "^1.4.1",
-    "jspdf": "^2.5.2",
+    "jspdf": "^3.0.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -23,6 +24,6 @@
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.2",
-    "vite": "^5.4.10"
+    "vite": "^7.1.9"
   }
 }
