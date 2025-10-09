@@ -1,6 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import html2canvas from "html2canvas";
-import jsPDF from "jspdf";
 
 import logoDrAndrewCosta from "./assets/dr-andrew-costa-logo.svg";
 
@@ -46,7 +44,7 @@ const STORAGE_KEYS = {
 const BASE_KEYS: BaseKey[] = ["Abdominal total", "Rins e Vias", "Transvaginal"];
 
 const EXAMS: ReadonlyArray<{ id: ExamId; label: string; map: EqMap }> = [
-  { id: "obst_rot", label: "Obstétrico de rotina (pré-natal)", map: { "Abdominal total": 1 } },
+  { id: "obst_rot", label: "Obstétrico de rotina", map: { "Abdominal total": 1 } },
   {
     id: "morf_1tri",
     label: "Obstétrico morfológico (1º trimestre)",
@@ -84,6 +82,29 @@ const ALLOWED_DIRECT_EXAMS = [
 ] as const;
 
 const EXAMS_BY_ID = new Map(EXAMS.map((exam) => [exam.id, exam] as const));
+
+type Html2Canvas = typeof import("html2canvas").default;
+type JsPDFConstructor = typeof import("jspdf").default;
+
+let exportModulesPromise:
+  | Promise<{ html2canvas: Html2Canvas; JsPDF: JsPDFConstructor }>
+  | null = null;
+
+declare global {
+  interface Window {
+    html2canvas?: Html2Canvas;
+  }
+}
+
+async function loadExportModules() {
+  if (!exportModulesPromise) {
+    exportModulesPromise = Promise.all([import("html2canvas"), import("jspdf")]).then(
+      ([{ default: html2canvas }, { default: JsPDF }]) => ({ html2canvas, JsPDF })
+    );
+  }
+
+  return exportModulesPromise;
+}
 
 function toCents(n: number): number {
   return Math.round(n * 100);
@@ -552,6 +573,10 @@ export default function App() {
   }, [equivalenceRows, filteredRows]);
 
   const hasDataForExport = filterDate !== "" && filteredRows.length > 0;
+  const totalPartialCents = useMemo(
+    () => detailedRows.reduce((sum, row) => sum + row.partialCents, 0),
+    [detailedRows]
+  );
   const isConsolidatedLayout = exportLayout === "consolidated";
   const isGeneratingFullPdf = isGeneratingPdf && exportLayout === "full";
   const isGeneratingConsolidatedPdf = isGeneratingPdf && exportLayout === "consolidated";
@@ -610,82 +635,131 @@ export default function App() {
         const element = printRef.current;
         if (!element) return;
 
+        const { html2canvas, JsPDF } = await loadExportModules();
+
+        if (typeof window !== "undefined" && !window.html2canvas) {
+          window.html2canvas = html2canvas;
+        }
+
+        const pdf = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = pdf.internal.pageSize.getHeight();
+        const margin = 8;
+        const contentWidth = pdfWidth - margin * 2;
+        const contentHeight = pdfHeight - margin * 2;
+        const html2canvasScale = Math.min(
+          3,
+          typeof window !== "undefined" && window.devicePixelRatio
+            ? Math.max(2, window.devicePixelRatio)
+            : 2
+        );
+
         const canvas = await html2canvas(element, {
-          scale: 2,
-          backgroundColor: "#fff",
+          scale: html2canvasScale,
+          backgroundColor: "#ffffff",
           useCORS: true,
         });
 
-        const image = canvas.toDataURL("image/png");
-        const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
-        const width = pdf.internal.pageSize.getWidth();
-        const height = pdf.internal.pageSize.getHeight();
-        const margin = 8;
-        const pageWidth = width - margin * 2;
-        const pageHeight = height - margin * 2;
-        const scale = Math.min(pageWidth / canvas.width, 1);
-        const renderWidth = canvas.width * scale;
-        const renderHeight = canvas.height * scale;
-        const sliceHeightPx = pageHeight / scale;
+        const elementRect = element.getBoundingClientRect();
+        const canvasScale = canvas.width / elementRect.width;
+        const anchors = Array.from(element.querySelectorAll<HTMLElement>("[data-break-anchor]"))
+          .map((anchor) => {
+            const anchorRect = anchor.getBoundingClientRect();
+            return Math.max(0, (anchorRect.top - elementRect.top) * canvasScale);
+          })
+          .sort((a, b) => a - b);
 
-        if (renderHeight <= pageHeight) {
+        const scale = Math.min(contentWidth / canvas.width, 1);
+        const renderWidth = canvas.width * scale;
+        const pageHeightPx = contentHeight / scale;
+
+        const totalHeight = canvas.height;
+        let offset = 0;
+        let pageIndex = 0;
+        let anchorIndex = 0;
+
+        const minGapPx = 80 * canvasScale;
+        const keepBottomGapPx = 48 * canvasScale;
+
+        while (offset < totalHeight - 1) {
+          const pageLimit = offset + pageHeightPx;
+          let currentSliceHeight = Math.min(pageHeightPx, totalHeight - offset);
+
+          let bestBreak: number | null = null;
+          for (let index = anchorIndex; index < anchors.length; index += 1) {
+            const anchorOffset = anchors[index];
+            if (anchorOffset <= offset + minGapPx) {
+              anchorIndex = index + 1;
+              continue;
+            }
+            if (anchorOffset >= pageLimit - keepBottomGapPx) {
+              break;
+            }
+            bestBreak = anchorOffset;
+            anchorIndex = index + 1;
+          }
+
+          if (bestBreak !== null && bestBreak > offset) {
+            currentSliceHeight = Math.min(bestBreak - offset, currentSliceHeight);
+          }
+
+          if (currentSliceHeight <= 0) {
+            break;
+          }
+
+          const sliceCanvas = document.createElement("canvas");
+          sliceCanvas.width = canvas.width;
+          const sliceHeightPx = Math.min(currentSliceHeight, totalHeight - offset);
+          let roundedSliceHeightPx = Math.max(1, Math.ceil(sliceHeightPx));
+          if (offset + roundedSliceHeightPx > totalHeight) {
+            roundedSliceHeightPx = totalHeight - offset;
+          }
+          if (roundedSliceHeightPx <= 0) {
+            break;
+          }
+          sliceCanvas.height = roundedSliceHeightPx;
+          const context = sliceCanvas.getContext("2d");
+
+          if (!context) {
+            throw new Error("Não foi possível preparar a página do PDF");
+          }
+
+          context.drawImage(
+            canvas,
+            0,
+            offset,
+            canvas.width,
+            sliceCanvas.height,
+            0,
+            0,
+            canvas.width,
+            sliceCanvas.height
+          );
+
+          const sliceImage = sliceCanvas.toDataURL("image/png");
+
+          if (pageIndex > 0) {
+            pdf.addPage();
+          }
+
+          const sliceHeightMm = sliceCanvas.height * scale;
+          const positionY = pageIndex === 0 && sliceHeightMm < contentHeight
+            ? (pdfHeight - sliceHeightMm) / 2
+            : margin;
+
           pdf.addImage(
-            image,
+            sliceImage,
             "PNG",
-            (width - renderWidth) / 2,
-            (height - renderHeight) / 2,
+            (pdfWidth - renderWidth) / 2,
+            positionY,
             renderWidth,
-            renderHeight,
+            sliceHeightMm,
             undefined,
             "FAST"
           );
-        } else {
-          let offset = 0;
-          let pageIndex = 0;
-          const totalHeight = canvas.height;
 
-          while (offset < totalHeight) {
-            const currentSliceHeight = Math.min(sliceHeightPx, totalHeight - offset);
-            const sliceCanvas = document.createElement("canvas");
-            sliceCanvas.width = canvas.width;
-            sliceCanvas.height = currentSliceHeight;
-            const context = sliceCanvas.getContext("2d");
-
-            if (!context) {
-              throw new Error("Não foi possível preparar a página do PDF");
-            }
-
-            context.drawImage(
-              canvas,
-              0,
-              offset,
-              canvas.width,
-              currentSliceHeight,
-              0,
-              0,
-              canvas.width,
-              currentSliceHeight
-            );
-
-            const sliceImage = sliceCanvas.toDataURL("image/png");
-            if (pageIndex > 0) {
-              pdf.addPage();
-            }
-
-            pdf.addImage(
-              sliceImage,
-              "PNG",
-              (width - renderWidth) / 2,
-              margin,
-              renderWidth,
-              currentSliceHeight * scale,
-              undefined,
-              "FAST"
-            );
-
-            offset += currentSliceHeight;
-            pageIndex += 1;
-          }
+          offset += sliceCanvas.height;
+          pageIndex += 1;
         }
 
         const suffix = layout === "consolidated" ? "_procedimentos" : "";
@@ -700,6 +774,10 @@ export default function App() {
     },
     [filterDate, hasDataForExport]
   );
+
+  const prefetchExportModules = useCallback(() => {
+    void loadExportModules();
+  }, []);
 
   return (
     <div className="min-h-screen">
@@ -736,6 +814,8 @@ export default function App() {
                   className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={!hasDataForExport || isGeneratingPdf}
                   onClick={() => generatePdf("full")}
+                  onPointerEnter={prefetchExportModules}
+                  onFocus={prefetchExportModules}
                 >
                   {isGeneratingFullPdf ? "Gerando..." : "Gerar PDF completo"}
                 </button>
@@ -744,6 +824,8 @@ export default function App() {
                   className="px-3 py-2 rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={!hasDataForExport || isGeneratingPdf}
                   onClick={() => generatePdf("consolidated")}
+                  onPointerEnter={prefetchExportModules}
+                  onFocus={prefetchExportModules}
                 >
                   {isGeneratingConsolidatedPdf ? "Gerando..." : "Gerar PDF consolidado"}
                 </button>
@@ -818,15 +900,17 @@ export default function App() {
       </div>
 
       <div className="report-paper" ref={printRef}>
-        <header className="report-header">
+        <header className="report-header" data-break-anchor>
           <div className="flex items-center justify-center">
-            <img
-              src={logoDrAndrewCosta}
-              alt="Logomarca Dr. Andrew Costa"
-              className="report-logo"
-            />
+            <div className="report-logo-frame">
+              <img
+                src={logoDrAndrewCosta}
+                alt="Logomarca Dr. Andrew Costa"
+                className="report-logo"
+              />
+            </div>
           </div>
-          <div className="flex flex-col -ml-16 md:ml-0">
+          <div className="flex flex-col items-center text-center gap-1">
             <div className="report-title">Relatório de Procedimentos – Ultrassonografias</div>
             <div className="report-author">DR. ANDREW COSTA</div>
             <div className="report-subtitle">
@@ -834,7 +918,7 @@ export default function App() {
             </div>
           </div>
         </header>
-        <div className="report-meta">
+        <div className="report-meta" data-break-anchor>
           <div className="box">
             <div className="label">Unidade</div>
             <div className="value">{currentClinic?.name ?? "—"}</div>
@@ -854,43 +938,52 @@ export default function App() {
         </div>
 
         {!isConsolidatedLayout && (
-          <section className="report-section">
+          <section className="report-section" data-break-anchor>
             <h2 className="report-section-title">Exames do dia</h2>
             {detailedRows.length > 0 ? (
               <div className="report-table-wrapper">
-                <table className="report-table" style={{ tableLayout: "fixed" }}>
+                <table className="report-table report-table--day" aria-label="Exames do dia">
                   <colgroup>
                     <col />
-                    <col style={{ width: "38ch" }} />
-                    <col style={{ width: "64px" }} />
+                    <col className="obs-col" />
                     <col />
+                    <col style={{ width: "64px" }} />
                     <col style={{ width: "110px" }} />
                   </colgroup>
                   <thead>
                     <tr>
-                      <th>Tipo de exame</th>
+                      <th className="center">Tipo de exame</th>
                       <th className="obs-col-header">Observações</th>
-                      <th className="right">Qtde</th>
-                      <th>Equivalência</th>
+                      <th className="center">Equivalência</th>
+                      <th className="center">Qtde</th>
                       <th className="right">Parcial</th>
                     </tr>
                   </thead>
                   <tbody>
                     {detailedRows.map((row) => (
-                      <tr key={row.id}>
-                        <td>{row.label}</td>
-                        <td
-                          className="obs-col-cell"
-                          style={{ hyphens: "auto", overflowWrap: "anywhere", wordBreak: "break-word" }}
-                        >
-                          {row.obsText || "—"}
+                      <tr key={row.id} data-break-anchor>
+                        <td className="center">{row.label}</td>
+                        <td className="obs-col">
+                          {row.obsText ? (
+                            <span className="obs-col-text">{row.obsText}</span>
+                          ) : (
+                            <span className="cell-placeholder">—</span>
+                          )}
                         </td>
-                        <td className="right">{row.qty}</td>
-                        <td>{row.equivalence}</td>
+                        <td className="center">{row.equivalence}</td>
+                        <td className="center">{row.qty}</td>
                         <td className="right">{BRL(fromCents(row.partialCents))}</td>
                       </tr>
                     ))}
                   </tbody>
+                  <tfoot>
+                    <tr data-break-anchor>
+                      <td colSpan={4} className="right font-semibold">
+                        Total do dia
+                      </td>
+                      <td className="right font-semibold">{BRL(fromCents(totalPartialCents))}</td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             ) : (
@@ -900,27 +993,34 @@ export default function App() {
         )}
 
         {!isConsolidatedLayout && (
-          <section className="report-section">
+          <section className="report-section" data-break-anchor>
             <h2 className="report-section-title">Equivalências de obstétricos, morfológicos e mamas</h2>
             {equivalenceRows.length > 0 ? (
               <div className="report-table-wrapper">
-                <table className="report-table">
+                <table className="report-table" aria-label="Equivalências de obstétricos, morfológicos e mamas">
+                  <colgroup>
+                    <col />
+                    <col style={{ width: "90px" }} />
+                    <col style={{ width: "110px" }} />
+                  </colgroup>
                   <thead>
                     <tr>
-                      <th>Base</th>
-                      <th className="right">Quantidade</th>
+                      <th className="center">Base</th>
+                      <th className="center">Quantidade</th>
                       <th className="right">Valor total</th>
                     </tr>
                   </thead>
                   <tbody>
                     {equivalenceRows.map((row) => (
-                      <tr key={row.key}>
-                        <td>{row.key}</td>
-                        <td className="right">{row.qty}</td>
+                      <tr key={row.key} data-break-anchor>
+                        <td className="center">{row.key}</td>
+                        <td className="center">{row.qty}</td>
                         <td className="right">{BRL(fromCents(row.cents))}</td>
                       </tr>
                     ))}
-                    <tr>
+                  </tbody>
+                  <tfoot>
+                    <tr data-break-anchor>
                       <td colSpan={2} className="right font-semibold">
                         Total geral
                       </td>
@@ -928,7 +1028,7 @@ export default function App() {
                         {BRL(fromCents(equivalenceRows.reduce((sum, current) => sum + current.cents, 0)))}
                       </td>
                     </tr>
-                  </tbody>
+                  </tfoot>
                 </table>
               </div>
             ) : (
@@ -937,32 +1037,39 @@ export default function App() {
           </section>
         )}
 
-        <section className="report-section">
+        <section className="report-section" data-break-anchor>
           <h2 className="report-section-title">Relatório dos procedimentos realizados</h2>
           {consolidated.rows.length > 0 ? (
             <div className="report-table-wrapper">
-              <table className="report-table">
+              <table className="report-table" aria-label="Relatório dos procedimentos realizados">
+                <colgroup>
+                  <col />
+                  <col style={{ width: "90px" }} />
+                  <col style={{ width: "110px" }} />
+                </colgroup>
                 <thead>
                   <tr>
-                    <th>Tipo</th>
-                    <th className="right">Quantidade</th>
+                    <th className="center">Tipo</th>
+                    <th className="center">Quantidade</th>
                     <th className="right">Subtotal</th>
                   </tr>
                 </thead>
                 <tbody>
                   {consolidated.rows.map((row) => (
-                    <tr key={row.label}>
-                      <td>{row.label}</td>
-                      <td className="right">{row.qty}</td>
+                    <tr key={row.label} data-break-anchor>
+                      <td className="center">{row.label}</td>
+                      <td className="center">{row.qty}</td>
                       <td className="right">{BRL(fromCents(row.cents))}</td>
                     </tr>
                   ))}
-                  <tr>
+                </tbody>
+                <tfoot>
+                  <tr data-break-anchor>
                     <td className="right font-semibold">Total geral</td>
-                    <td className="right font-semibold">{consolidated.totalQty}</td>
+                    <td className="center font-semibold">{consolidated.totalQty}</td>
                     <td className="right font-semibold">{BRL(fromCents(consolidated.totalCents))}</td>
                   </tr>
-                </tbody>
+                </tfoot>
               </table>
             </div>
           ) : (
@@ -971,9 +1078,9 @@ export default function App() {
         </section>
 
         {noteLines.length > 0 && (
-          <section className="report-section">
+          <section className="report-section" data-break-anchor>
             <h2 className="report-section-title">Observações finais</h2>
-            <div className="report-notes-box">
+            <div className="report-notes-box" data-break-anchor>
               <ul>
                 {noteLines.map((line, index) => (
                   <li key={`${line}-${index}`}>{line}</li>
@@ -983,7 +1090,7 @@ export default function App() {
           </section>
         )}
 
-        <footer className="report-footer">
+        <footer className="report-footer" data-break-anchor>
           <p>
             * Equivalências fixas: Obstétrico de rotina → 1× Abdominal total; Morfológico 1º trimestre → 1× Abdominal total + 1×
             Rins e Vias; Morfológico do 2º trimestre → 1× Abdominal total + 1× Rins e Vias + 1× Transvaginal; Mamas/Mamas e Axilas
