@@ -717,6 +717,8 @@ export default function App() {
       await waitForNextFrame();
       await waitForNextFrame();
 
+      let cleanup: (() => void) | null = null;
+
       try {
         const element = printRef.current;
         if (!element) return;
@@ -786,6 +788,7 @@ export default function App() {
         console.error("Erro ao gerar PDF", error);
         alert("Não foi possível gerar o PDF. Tente novamente.");
       } finally {
+        if (cleanup) cleanup();
         setIsGeneratingPdf(false);
         setExportLayout(null);
       }
