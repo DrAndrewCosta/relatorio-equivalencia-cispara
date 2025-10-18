@@ -106,6 +106,101 @@ async function loadExportModules() {
   return exportModulesPromise;
 }
 
+const CSS_PIXEL_TO_MM = 25.4 / 96;
+const PDF_MARGIN_MM = 8;
+const MAX_CANVAS_SCALE = 3;
+const MIN_CANVAS_SCALE = 2;
+const MIN_ANCHOR_GAP_PX = 80;
+const KEEP_BOTTOM_GAP_PX = 48;
+
+async function waitForNextFrame() {
+  return new Promise<void>((resolve) => {
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => resolve());
+    } else {
+      setTimeout(() => resolve(), 0);
+    }
+  });
+}
+
+function collectBreakAnchors(element: HTMLElement, canvasScale: number) {
+  const containerRect = element.getBoundingClientRect();
+
+  return Array.from(element.querySelectorAll<HTMLElement>("[data-break-anchor]"))
+    .map((anchor) => {
+      const { top } = anchor.getBoundingClientRect();
+      return Math.max(0, (top - containerRect.top) * canvasScale);
+    })
+    .sort((a, b) => a - b);
+}
+
+type Slice = { offset: number; height: number };
+
+function computeSlices(
+  totalHeight: number,
+  anchors: number[],
+  pageHeightPx: number,
+  canvasScale: number
+): Slice[] {
+  const slices: Slice[] = [];
+  const minGapPx = MIN_ANCHOR_GAP_PX * canvasScale;
+  const keepBottomGapPx = KEEP_BOTTOM_GAP_PX * canvasScale;
+
+  let offset = 0;
+  let anchorIndex = 0;
+
+  while (offset < totalHeight - 1) {
+    const limit = offset + pageHeightPx;
+    let sliceHeight = Math.min(pageHeightPx, totalHeight - offset);
+    let bestBreak: number | null = null;
+
+    for (let index = anchorIndex; index < anchors.length; index += 1) {
+      const anchorOffset = anchors[index];
+      if (anchorOffset <= offset + minGapPx) {
+        anchorIndex = index + 1;
+        continue;
+      }
+      if (anchorOffset >= limit - keepBottomGapPx) {
+        break;
+      }
+      bestBreak = anchorOffset;
+      anchorIndex = index + 1;
+    }
+
+    if (bestBreak !== null && bestBreak > offset) {
+      sliceHeight = Math.min(sliceHeight, bestBreak - offset);
+    }
+
+    const roundedHeight = Math.max(1, Math.min(totalHeight - offset, Math.ceil(sliceHeight)));
+    if (roundedHeight <= 0) {
+      break;
+    }
+
+    slices.push({ offset, height: roundedHeight });
+    offset += roundedHeight;
+  }
+
+  return slices;
+}
+
+async function captureReportCanvas(element: HTMLElement, html2canvas: Html2Canvas) {
+  const elementRect = element.getBoundingClientRect();
+  const deviceScale =
+    typeof window !== "undefined" && window.devicePixelRatio
+      ? Math.max(MIN_CANVAS_SCALE, Math.min(MAX_CANVAS_SCALE, window.devicePixelRatio))
+      : MIN_CANVAS_SCALE;
+
+  const canvas = await html2canvas(element, {
+    scale: deviceScale,
+    backgroundColor: "#ffffff",
+    useCORS: true,
+  });
+
+  const canvasScale = elementRect.width > 0 ? canvas.width / elementRect.width : deviceScale;
+
+  return { canvas, elementRect, canvasScale };
+}
+
 function toCents(n: number): number {
   return Math.round(n * 100);
 }
@@ -619,15 +714,6 @@ export default function App() {
       setIsGeneratingPdf(true);
       setExportLayout(layout);
 
-      const waitForNextFrame = () =>
-        new Promise<void>((resolve) => {
-          if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-            window.requestAnimationFrame(() => resolve());
-          } else {
-            setTimeout(() => resolve(), 0);
-          }
-        });
-
       await waitForNextFrame();
       await waitForNextFrame();
 
@@ -643,190 +729,61 @@ export default function App() {
           window.html2canvas = html2canvas;
         }
 
-        const pdf = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = pdf.internal.pageSize.getHeight();
-        const margin = 8;
-        const contentWidth = pdfWidth - margin * 2;
-        const contentHeight = pdfHeight - margin * 2;
-        const html2canvasScale = Math.min(
-          3,
-          typeof window !== "undefined" && window.devicePixelRatio
-            ? Math.max(2, window.devicePixelRatio)
-            : 2
-        );
+        const pdfDoc = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
+        const pdfWidth = pdfDoc.internal.pageSize.getWidth();
+        const pdfHeight = pdfDoc.internal.pageSize.getHeight();
+        const contentWidth = pdfWidth - PDF_MARGIN_MM * 2;
+        const contentHeight = pdfHeight - PDF_MARGIN_MM * 2;
 
-        const canvas = await html2canvas(element, {
-          scale: html2canvasScale,
-          backgroundColor: "#ffffff",
-          useCORS: true,
-        });
+        const { canvas, elementRect, canvasScale } = await captureReportCanvas(element, html2canvas);
 
-        const elementRect = element.getBoundingClientRect();
-        const canvasScale = elementRect.width > 0 ? canvas.width / elementRect.width : html2canvasScale;
-        const cssPixelToMm = 25.4 / 96; // 1 CSS px in millimetres
-        const mmPerCanvasPixel = cssPixelToMm / canvasScale;
-
-        const rawRenderWidthMm = canvas.width * mmPerCanvasPixel;
-        const fitScale = rawRenderWidthMm > 0 ? Math.min(contentWidth / rawRenderWidthMm, 1) : 1;
-        const effectiveMmPerPixel = mmPerCanvasPixel * fitScale;
-        const renderWidth = rawRenderWidthMm * fitScale;
+        const elementWidthMm = elementRect.width * CSS_PIXEL_TO_MM;
+        const shouldShrinkToFit = elementWidthMm > contentWidth;
+        const fitScale = shouldShrinkToFit && elementWidthMm > 0 ? contentWidth / elementWidthMm : 1;
+        const effectiveMmPerPixel = (CSS_PIXEL_TO_MM / canvasScale) * fitScale;
+        const renderWidth = elementWidthMm * fitScale;
         const pageHeightPx = contentHeight / effectiveMmPerPixel;
 
-        const anchors = Array.from(element.querySelectorAll<HTMLElement>("[data-break-anchor]"))
-          .map((anchor) => {
-            const anchorRect = anchor.getBoundingClientRect();
-            return Math.max(0, (anchorRect.top - elementRect.top) * canvasScale);
-          })
-          .sort((a, b) => a - b);
+        const anchors = collectBreakAnchors(element, canvasScale);
+        const slices = computeSlices(canvas.height, anchors, pageHeightPx, canvasScale);
+        if (slices.length === 0 && canvas.height > 0) {
+          slices.push({ offset: 0, height: canvas.height });
+        }
 
-        const totalHeight = canvas.height;
-        let offset = 0;
-        let pageIndex = 0;
-        let anchorIndex = 0;
-
-        const minGapPx = 80 * canvasScale;
-        const keepBottomGapPx = 48 * canvasScale;
-
-        while (offset < totalHeight - 1) {
-          const pageLimit = offset + pageHeightPx;
-          let currentSliceHeight = Math.min(pageHeightPx, totalHeight - offset);
-
-          let bestBreak: number | null = null;
-          for (let index = anchorIndex; index < anchors.length; index += 1) {
-            const anchorOffset = anchors[index];
-            if (anchorOffset <= offset + minGapPx) {
-              anchorIndex = index + 1;
-              continue;
-            }
-            if (anchorOffset >= pageLimit - keepBottomGapPx) {
-              break;
-            }
-            bestBreak = anchorOffset;
-            anchorIndex = index + 1;
-          }
-
-          if (bestBreak !== null && bestBreak > offset) {
-            currentSliceHeight = Math.min(bestBreak - offset, currentSliceHeight);
-          }
-
-          if (currentSliceHeight <= 0) {
-            break;
-          }
-
+        slices.forEach(({ offset, height }, index) => {
           const sliceCanvas = document.createElement("canvas");
           sliceCanvas.width = canvas.width;
-          const sliceHeightPx = Math.min(currentSliceHeight, totalHeight - offset);
-          let roundedSliceHeightPx = Math.max(1, Math.ceil(sliceHeightPx));
-          if (offset + roundedSliceHeightPx > totalHeight) {
-            roundedSliceHeightPx = totalHeight - offset;
-          }
-          if (roundedSliceHeightPx <= 0) {
-            break;
-          }
-          sliceCanvas.height = roundedSliceHeightPx;
-          const context = sliceCanvas.getContext("2d");
+          sliceCanvas.height = height;
 
+          const context = sliceCanvas.getContext("2d");
           if (!context) {
             throw new Error("Não foi possível preparar a página do PDF");
           }
 
-          context.drawImage(
-            canvas,
-            0,
-            offset,
-            canvas.width,
-            sliceCanvas.height,
-            0,
-            0,
-            canvas.width,
-            sliceCanvas.height
-          );
+          context.drawImage(canvas, 0, offset, canvas.width, height, 0, 0, canvas.width, height);
 
-          const sliceImage = sliceCanvas.toDataURL("image/png");
-
-          if (pageIndex > 0) {
-            pdf.addPage();
+          if (index > 0) {
+            pdfDoc.addPage();
           }
 
-          const sliceHeightMm = sliceCanvas.height * effectiveMmPerPixel;
-          const positionX = margin + (contentWidth - renderWidth) / 2;
+          const sliceImage = sliceCanvas.toDataURL("image/png");
+          const sliceHeightMm = height * effectiveMmPerPixel;
+          const positionX = PDF_MARGIN_MM + (contentWidth - renderWidth) / 2;
 
-          pdf.addImage(
+          pdfDoc.addImage(
             sliceImage,
             "PNG",
             positionX,
-            margin,
+            PDF_MARGIN_MM,
             renderWidth,
             sliceHeightMm,
             undefined,
             "FAST"
           );
-
-          offset += sliceCanvas.height;
-          pageIndex += 1;
-        }
-
-        const pdf = new JsPDF({ orientation: "p", unit: "mm", format: "a4" });
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfPixelWidth = Math.round((pdfWidth / 25.4) * 96);
-
-        const wrapper = document.createElement("div");
-        wrapper.style.position = "fixed";
-        wrapper.style.inset = "0";
-        wrapper.style.left = "-10000px";
-        wrapper.style.width = `${pdfPixelWidth}px`;
-        wrapper.style.pointerEvents = "none";
-
-        const clone = element.cloneNode(true) as HTMLElement;
-        clone.setAttribute("data-pdf-clone", "true");
-        wrapper.appendChild(clone);
-        document.body.appendChild(wrapper);
-        cleanup = () => {
-          wrapper.remove();
-        };
-
-        await new Promise<void>((resolve, reject) => {
-          const options: any = {
-            margin: [0, 0, 0, 0],
-            autoPaging: "text",
-            width: pdfWidth,
-            windowWidth: pdfPixelWidth,
-            html2canvas: {
-              scale: Math.min(3, window.devicePixelRatio ? Math.max(2, window.devicePixelRatio) : 2),
-              useCORS: true,
-              backgroundColor: "#ffffff",
-              onclone: (doc: Document) => {
-                const clonedPaper = doc.querySelector<HTMLElement>(".report-paper[data-pdf-clone='true']");
-                if (clonedPaper) {
-                  clonedPaper.style.maxWidth = "none";
-                  clonedPaper.style.width = "210mm";
-                  clonedPaper.style.border = "none";
-                  clonedPaper.style.boxShadow = "none";
-                  clonedPaper.style.margin = "0 auto";
-                  clonedPaper.style.padding = "12mm 14mm";
-                }
-              },
-            },
-            pagebreak: { mode: ["css", "legacy", "avoid-all"] },
-            callback: (doc: InstanceType<JsPDFConstructor>) => {
-              try {
-                const suffix = layout === "consolidated" ? "_procedimentos" : "";
-                doc.save(`relatorio_exames_${fmtBRDate(filterDate)}${suffix}.pdf`);
-                resolve();
-              } catch (error) {
-                reject(error);
-              }
-            },
-          };
-
-          (pdf as any)
-            .html(clone, options)
-            .then(() => {
-              /* no-op handled in callback */
-            })
-            .catch(reject);
         });
+
+        const suffix = layout === "consolidated" ? "_procedimentos" : "";
+        pdfDoc.save(`relatorio_exames_${fmtBRDate(filterDate)}${suffix}.pdf`);
       } catch (error) {
         console.error("Erro ao gerar PDF", error);
         alert("Não foi possível gerar o PDF. Tente novamente.");
